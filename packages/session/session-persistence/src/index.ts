@@ -102,6 +102,13 @@ export abstract class SessionPersistence extends Service {
   abstract readonly supportsRawArtifacts: boolean
 
   /**
+   * Whether this backend can durably remove a persisted session. Callers must
+   * test this property before calling {@link delete}; unsupported backends keep
+   * stored data unchanged and reject the operation.
+   */
+  readonly supportsDeletion: boolean = false
+
+  /**
    * Read a session's backend-owned artifact text verbatim — the exact durable
    * bytes the backend wrote (decoded from its physical encoding, e.g. a
    * decompressed JSONL). The returned `content` is the raw text, not a
@@ -121,6 +128,22 @@ export abstract class SessionPersistence extends Service {
       return Promise.reject(signal.reason instanceof Error ? signal.reason : new Error('aborted'))
     }
     return Promise.reject(new Error('this session persistence backend does not expose raw artifacts'))
+  }
+
+  /**
+   * Durably remove a persisted session and its backend-owned artifacts. Callers
+   * first test {@link supportsDeletion}; implementations define whether an
+   * already-absent session is a successful no-op or a not-found rejection.
+   * @param _id - the persisted session to remove (unused by the unsupported default).
+   * @param signal - optional cancellation for backend deletion work.
+   * @returns a promise that settles after the deletion is durable.
+   * @throws when this backend does not support deletion.
+   */
+  delete(_id: SessionId, signal?: AbortSignal): Promise<void> {
+    if (signal?.aborted === true) {
+      return Promise.reject(signal.reason instanceof Error ? signal.reason : new Error('aborted'))
+    }
+    return Promise.reject(new Error('this session persistence backend does not support deletion'))
   }
 
   /**

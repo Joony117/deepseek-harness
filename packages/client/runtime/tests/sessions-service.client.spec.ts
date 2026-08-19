@@ -9,7 +9,7 @@
 import { Context } from '@deepseek-ai/cordis'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { SessionId } from '@deepseek-ai/dsh-api-remotes/client'
-import { SessionCreateError, SessionRuntime, scopeOf } from '../src/client/sessions/service.ts'
+import { SessionCreateError, SessionDeleteError, SessionRuntime, scopeOf } from '../src/client/sessions/service.ts'
 import { FakeApiClient, deferred, err, fakeRemote, ok } from './fake-api.client.ts'
 
 const sid = (s: string): SessionId => s as SessionId
@@ -591,6 +591,39 @@ describe('fork', () => {
     await expect(b.svc.fork({ sessionId: sid('source'), increaseTitle: true }))
       .rejects.toThrow('fork child rename failed: title-invalid: rejected')
     expect(b.svc.binding(sid('child'))).toBeDefined()
+  })
+})
+
+describe('delete', () => {
+  it('removes the row and clears the current selection on success', async () => {
+    const b = bench()
+    await feedList(b, [{ id: 'keep' }, { id: 'delete-me' }])
+    b.svc.open(sid('delete-me'))
+
+    await expect(b.svc.delete(sid('delete-me'))).resolves.toBeUndefined()
+
+    expect(b.api.callsOf('session.delete')).toEqual([{ sessionId: 'delete-me' }])
+    expect(b.svc.list.getSnapshot()).toMatchObject({ ids: ['keep'], current: undefined })
+  })
+
+  it('throws a structured error and preserves local state when deletion fails', async () => {
+    const b = bench()
+    await feedList(b, [{ id: 'keep' }])
+    b.svc.open(sid('keep'))
+    b.api.onDelete = () => Promise.resolve(err({
+      code: 'session-delete-unavailable',
+      message: 'still attached',
+      details: { sessionId: sid('keep') },
+    }))
+
+    const failure = await b.svc.delete(sid('keep')).catch((error: unknown) => error)
+
+    expect(failure).toBeInstanceOf(SessionDeleteError)
+    expect(failure).toMatchObject({
+      sessionId: 'keep',
+      rpcError: { code: 'session-delete-unavailable' },
+    })
+    expect(b.svc.list.getSnapshot()).toMatchObject({ ids: ['keep'], current: 'keep' })
   })
 })
 

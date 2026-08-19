@@ -2358,6 +2358,52 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
         return ok(request, { sessionId: childId })
       },
 
+      async delete(request, signal) {
+        const { sessionId } = request.payload
+        const cancelled = () => err<{ deleted: true }>(request, {
+          code: 'cancelled',
+          message: 'session deletion was aborted',
+          details: {},
+        })
+        if (isAborted(signal)) return cancelled()
+        if (ctx.sessions.get(sessionId) !== undefined) {
+          return err(request, {
+            code: 'session-delete-unavailable',
+            message: `session "${sessionId}" is attached; detach it before deletion`,
+            details: { sessionId },
+          })
+        }
+        if (!ctx.sessionPersistence.supportsDeletion) {
+          return err(request, {
+            code: 'session-delete-unsupported',
+            message: 'this persistence backend does not support session deletion',
+            details: { sessionId },
+          })
+        }
+        try {
+          const exists = (await ctx.sessionPersistence.list(signal))
+            .some(header => header.id === sessionId)
+          if (isAborted(signal)) return cancelled()
+          if (!exists) {
+            return err(request, {
+              code: 'session-not-found',
+              message: `session "${sessionId}" not found in persistence`,
+              details: { sessionId },
+            })
+          }
+          await ctx.sessionPersistence.delete(sessionId, signal)
+          if (isAborted(signal)) return cancelled()
+          return ok(request, { deleted: true })
+        } catch (error: unknown) {
+          if (isAborted(signal)) return cancelled()
+          return err(request, {
+            code: 'internal',
+            message: `failed to delete session "${sessionId}": ${String(error)}`,
+            details: {},
+          })
+        }
+      },
+
       async prompt(request) {
         const { sessionId, mode, content, clientTimeZone } = request.payload
         const canonicalTimeZone = clientTimeZone === undefined
