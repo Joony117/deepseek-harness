@@ -43,11 +43,18 @@ function persistence(options: {
   }
 }
 
-async function composed(service: SessionPersistence): Promise<Context> {
+async function composed(service: SessionPersistence, running: SessionId[] = []): Promise<Context> {
   const ctx = new Context()
   await ctx.plugin(SessionStore)
   await ctx.plugin(UserQuestionService)
   ctx.provide('sessionPersistence', service as never)
+  // Deletion asks the Agent registry for in-flight work, not the session store:
+  // the list path hydrates served sessions into the store, so residency there
+  // says nothing about busyness.
+  const busy = new Set<SessionId>(running)
+  ctx.provide('agents', {
+    get: (id: SessionId) => busy.has(id) ? { status: 'running' } : undefined,
+  } as never)
   return ctx
 }
 
@@ -71,11 +78,10 @@ describe('sessions.delete', () => {
     await ctx.fiber.dispose()
   })
 
-  it('refuses an attached session before checking backend support or persistence', async () => {
+  it('refuses a running session before checking backend support or persistence', async () => {
     const sessionId = sid('session-live')
     const backend = persistence({ supportsDeletion: false })
-    const ctx = await composed(backend.service)
-    ctx.sessions.create(sessionId, { meta: { cwd: '/project' } })
+    const ctx = await composed(backend.service, [sessionId])
 
     const response = await api(ctx).sessions.delete(request(sessionId), new AbortController().signal)
 
@@ -85,6 +91,39 @@ describe('sessions.delete', () => {
     })
     expect(backend.list).not.toHaveBeenCalled()
     expect(backend.remove).not.toHaveBeenCalled()
+    await ctx.fiber.dispose()
+  })
+
+  // Regression: guarding on ctx.sessions residency made every listed row
+  // undeletable, because serving a list hydrates its sessions into the store.
+  it('deletes a store-resident session that is not running', async () => {
+    const sessionId = sid('session-idle')
+    const backend = persistence({ headers: [header(sessionId)] })
+    const ctx = await composed(backend.service)
+    ctx.sessions.create(sessionId, { meta: { cwd: '/project' } })
+
+    const response = await api(ctx).sessions.delete(request(sessionId), new AbortController().signal)
+
+    expect(response.result).toEqual({ ok: true, value: { deleted: true } })
+    expect(backend.remove).toHaveBeenCalledWith(sessionId, expect.anything())
+    await ctx.fiber.dispose()
+  })
+
+  // Regression: the seam was read as a bare ctx property, which cordis rejects
+  // for an undeclared injection, so every reachable delete threw at runtime.
+  it('reports an unsupported backend when no persistence is mounted at all', async () => {
+    const sessionId = sid('session-old')
+    const ctx = new Context()
+    await ctx.plugin(SessionStore)
+    await ctx.plugin(UserQuestionService)
+    ctx.provide('agents', { get: () => undefined } as never)
+
+    const response = await api(ctx).sessions.delete(request(sessionId), new AbortController().signal)
+
+    expect(response.result).toMatchObject({
+      ok: false,
+      error: { code: 'session-delete-unsupported', details: { sessionId } },
+    })
     await ctx.fiber.dispose()
   })
 
