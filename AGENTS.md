@@ -1,5 +1,10 @@
 # AGENTS.md
 
+> **LOCAL FORK — not upstream.** `origin` is the real deepseek-ai repository and
+> there is no fork remote, so **never push**. Work belongs on branch
+> `delete-session`, never on `master`. Read [FORK.md](FORK.md) before running any
+> git command here. (This block is local to this checkout, not upstream text.)
+
 DeepSeek Harness is a plugin-based agent harness on vendored Cordis: **everything is a plugin**. Read [docs/architecture.md](docs/architecture.md) before changing `packages/`; follow [docs/AGENTS.md](docs/AGENTS.md) for documentation.
 
 ## Pre-release stance: foundation over blast radius
