@@ -135,6 +135,22 @@ export class SessionForkError extends Error {
   }
 }
 
+/** Structured session-deletion failure. */
+export class SessionDeleteError extends Error {
+  override readonly name = 'SessionDeleteError'
+
+  /**
+   * @param rpcError - Host business or folded transport error.
+   * @param sessionId - the session requested for deletion.
+   */
+  constructor(
+    readonly rpcError: RpcError,
+    readonly sessionId: SessionId,
+  ) {
+    super(`session deletion failed: ${rpcError.code}: ${rpcError.message}`)
+  }
+}
+
 /** Session assembly handle for SessionProvider/inject factories (identity-stable per session). */
 export interface SessionBinding {
   readonly sessionId: SessionId
@@ -529,6 +545,19 @@ export class SessionRuntime implements ISessions {
       if (!renamed.ok) throw new Error(`fork child rename failed: ${renamed.error.code}: ${renamed.error.message}`)
     }
     return childId
+  }
+
+  /**
+   * Durably delete one detached session. On resolution the row is absent
+   * from the list store, and deleting the current session leaves the
+   * no-session view selected.
+   * @param sessionId - persisted session to delete.
+   * @throws {SessionDeleteError} with the requested session id.
+   */
+  async delete(sessionId: SessionId): Promise<void> {
+    const result = await this.manager.delete(sessionId)
+    if (!result.ok) throw new SessionDeleteError(result.error, sessionId)
+    this.projectList()
   }
 
   /**

@@ -138,6 +138,16 @@ export const sessionForkValueSchema = z.object({
   sessionId: sessionIdSchema,
 }) satisfies z.ZodType<Wire<ResponseValue<'session.fork'>>>
 
+/** session.delete request payload. */
+export const sessionDeleteRequestSchema = z.object({
+  sessionId: sessionIdSchema,
+}) satisfies z.ZodType<Wire<RequestPayload<'session.delete'>>>
+
+/** session.delete response value. */
+export const sessionDeleteValueSchema = z.object({
+  deleted: z.literal(true),
+}) satisfies z.ZodType<Wire<ResponseValue<'session.delete'>>>
+
 /** session.history request payload (beforeSeq/maxMessages page backwards from the window tail). */
 export const sessionHistoryRequestSchema = z.object({
   sessionId: sessionIdSchema,

@@ -54,6 +54,7 @@ function scriptedApi(overrides: {
       }),
       rename: r => ok(r, { title: 'renamed', seq: 0 }),
       fork: r => ok(r, { sessionId: sid('s-fork') }),
+      delete: r => ok(r, { deleted: true as const }),
       prompt: r => ok(r, { accepted: true as const }),
       attachment: r => ok(r, {
         attachment: { attachmentId: 'a' as never, mediaType: 'image/png', bytes: 1, width: 1, height: 1 },
@@ -217,6 +218,42 @@ describe('unary round trip', () => {
     const response = await client(api).sessions.fork({ sessionId: sid('s-parent'), atSeq: 7 })
     expect(seen?.payload).toEqual({ sessionId: 's-parent', atSeq: 7 })
     expect(response.result).toEqual({ ok: true, value: { sessionId: 's-child' } })
+  })
+
+  it('routes session deletion and validates its dedicated business errors', async () => {
+    let seen: RpcRequest<{ sessionId: SessionId }> | undefined
+    const api = scriptedApi({
+      sessions: {
+        delete: (request) => {
+          seen = request
+          return ok(request, { deleted: true as const })
+        },
+      },
+    })
+    const response = await client(api).sessions.delete({ sessionId: sid('s-old') })
+    expect(seen?.payload).toEqual({ sessionId: 's-old' })
+    expect(response.result).toEqual({ ok: true, value: { deleted: true } })
+
+    const refused = scriptedApi({
+      sessions: {
+        delete: request => Promise.resolve({
+          rpcId: request.rpcId,
+          result: {
+            ok: false,
+            error: {
+              code: 'session-delete-unsupported',
+              message: 'unsupported',
+              details: { sessionId: request.payload.sessionId },
+            },
+          },
+        }),
+      },
+    })
+    const errorResponse = await client(refused).sessions.delete({ sessionId: sid('s-old') })
+    expect(errorResponse.result).toMatchObject({
+      ok: false,
+      error: { code: 'session-delete-unsupported', details: { sessionId: 's-old' } },
+    })
   })
 
   it('routes workspace rename, delete, and ordering through the wire', async () => {

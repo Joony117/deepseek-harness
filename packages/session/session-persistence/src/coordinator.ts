@@ -599,6 +599,10 @@ export class PersistenceCoordinator<TornMarker = unknown> {
    * same id, so writes for one session never interleave. Keyed by session id.
    */
   private chains = new Map<SessionId, Promise<unknown>>()
+  /** Operations admitted to a per-session chain but not yet settled. */
+  private pending = new Map<SessionId, number>()
+  /** Session ids whose backend-owned artifacts are being deleted. */
+  private deletions = new Set<SessionId>()
   /** Resolved fixed write-batching window shared by per-session controllers. */
   private readonly writeBatchMaxDelayMs: number
 
@@ -640,6 +644,34 @@ export class PersistenceCoordinator<TornMarker = unknown> {
       return Promise.reject(new TypeError('session metadata createdAt must be a non-negative safe integer'))
     }
     return this.serialize(snapshot.id, () => this.createCore(snapshot))
+  }
+
+  /**
+   * Run backend deletion only when coordinator-owned work cannot recreate the
+   * session. New per-id operations reject until deletion settles. A successful
+   * deletion discards detached cursor state for the removed artifact.
+   * @param id - persisted session identity to delete.
+   * @param remove - backend removal after its own identity validation.
+   * @param signal - optional cancellation for deletion work.
+   */
+  async delete(id: SessionId, remove: () => Promise<void>, signal?: AbortSignal): Promise<void> {
+    signal?.throwIfAborted()
+    const live = [...this.live.keys()].some(session => session.id === id)
+    if (this.deletions.has(id)
+      || this.pending.has(id)
+      || this.retirements.has(id)
+      || this.preparations.has(id)
+      || live
+      || this.states.get(id)?.owner !== undefined) {
+      throw new Error(`cannot delete session "${id}" while persistence work is pending`)
+    }
+    this.deletions.add(id)
+    try {
+      await remove()
+      this.states.delete(id)
+    } finally {
+      this.deletions.delete(id)
+    }
   }
 
   private async createCore(meta: SessionHeader): Promise<void> {
@@ -1012,6 +1044,10 @@ export class PersistenceCoordinator<TornMarker = unknown> {
     op: () => Promise<T> | T,
     signal?: AbortSignal,
   ): Promise<T> {
+    if (this.deletions.has(id)) {
+      return Promise.reject(new Error(`cannot access session "${id}" while deletion is in progress`))
+    }
+    this.pending.set(id, (this.pending.get(id) ?? 0) + 1)
     const prior = this.chains.get(id) ?? Promise.resolve()
     let started = false
     const run = (): Promise<T> | T => {
@@ -1020,6 +1056,12 @@ export class PersistenceCoordinator<TornMarker = unknown> {
       return op()
     }
     const next = prior.then(run, run)
+    const settlePending = (): void => {
+      const remaining = (this.pending.get(id) ?? 1) - 1
+      if (remaining === 0) this.pending.delete(id)
+      else this.pending.set(id, remaining)
+    }
+    void next.then(settlePending, settlePending)
     // Keep the chain alive but swallow this op's rejection for the NEXT waiter
     // (the caller still sees the real rejection via `next`).
     const tail = next.then(() => undefined, () => undefined)
