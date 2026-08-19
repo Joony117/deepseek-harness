@@ -2366,14 +2366,22 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
           details: {},
         })
         if (isAborted(signal)) return cancelled()
-        if (ctx.sessions.get(sessionId) !== undefined) {
+        // Store residency is not busyness: the list path hydrates every served
+        // session into ctx.sessions, so `get` is true for idle rows too and
+        // guarding on it makes deletion unreachable. Refuse only in-flight work,
+        // the same predicate the summary and status frames use.
+        if (ctx.agents.get(sessionId)?.status === 'running') {
           return err(request, {
             code: 'session-delete-unavailable',
-            message: `session "${sessionId}" is attached; detach it before deletion`,
+            message: `session "${sessionId}" is running; stop it before deletion`,
             details: { sessionId },
           })
         }
-        if (!ctx.sessionPersistence.supportsDeletion) {
+        // Optional accessor, like every other persistence read here: this
+        // service does not inject the seam, and surfaces without it must not
+        // fail to boot for a capability only this method needs.
+        const persistence = ctx.get('sessionPersistence')
+        if (persistence === undefined || !persistence.supportsDeletion) {
           return err(request, {
             code: 'session-delete-unsupported',
             message: 'this persistence backend does not support session deletion',
@@ -2381,7 +2389,7 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
           })
         }
         try {
-          const exists = (await ctx.sessionPersistence.list(signal))
+          const exists = (await persistence.list(signal))
             .some(header => header.id === sessionId)
           if (isAborted(signal)) return cancelled()
           if (!exists) {
@@ -2391,7 +2399,7 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
               details: { sessionId },
             })
           }
-          await ctx.sessionPersistence.delete(sessionId, signal)
+          await persistence.delete(sessionId, signal)
           if (isAborted(signal)) return cancelled()
           return ok(request, { deleted: true })
         } catch (error: unknown) {
