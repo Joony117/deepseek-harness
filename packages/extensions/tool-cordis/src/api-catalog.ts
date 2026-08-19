@@ -1028,11 +1028,23 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         parameters: [],
       },
       {
+        signature: 'readonly supportsDeletion: boolean = false',
+        description: 'Whether this backend can durably remove a persisted session. Callers must test this property before calling delete; unsupported backends keep stored data unchanged and reject the operation.',
+        parameters: [],
+      },
+      {
         signature: 'readRaw(_id: SessionId, signal?: AbortSignal): Promise<SessionRawArtifact | undefined>',
         description: 'Read a session\'s backend-owned artifact text verbatim — the exact durable bytes the backend wrote (decoded from its physical encoding, e.g. a decompressed JSONL). The returned `content` is the raw text, not a reconstruction from parsed events, so it preserves backend-specific serialization (chunk packing, key order, line breaks). Callers first test supportsRawArtifacts; `undefined` then means only that the requested session has no materialized artifact.',
         parameters: [{ name: '_id', description: 'the persisted session to read (unused by the default: no per-session artifact).' }, { name: 'signal', description: 'optional cancellation for backend read work.' }],
         returns: 'the raw artifact plus its parsed header, or `undefined` when the session is absent.',
         throws: ['when this backend does not expose per-session raw artifacts.'],
+      },
+      {
+        signature: 'delete(_id: SessionId, signal?: AbortSignal): Promise<void>',
+        description: 'Durably remove a persisted session and its backend-owned artifacts. Callers first test supportsDeletion; implementations define whether an already-absent session is a successful no-op or a not-found rejection.',
+        parameters: [{ name: '_id', description: 'the persisted session to remove (unused by the unsupported default).' }, { name: 'signal', description: 'optional cancellation for backend deletion work.' }],
+        returns: 'a promise that settles after the deletion is durable.',
+        throws: ['when this backend does not support deletion.'],
       },
       {
         signature: 'abstract create(meta: SessionHeader): Promise<void>',
