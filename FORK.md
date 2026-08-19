@@ -29,7 +29,9 @@ not exist upstream, and `origin` is the **real upstream repository**.
 ## Why the diff is deliberately small
 
 This fork exists to carry one feature: a session delete button (see
-`change_log.md` and `details.md` in `E:\Qwen3.8_27b`). Every line that differs
+[details.md](details.md), [change_log.md](change_log.md), [tasks.md](tasks.md),
+and [finished_tasks.md](finished_tasks.md) in this directory — synced copies of
+the canonical set in `E:\Qwen3.8_27b`). Every line that differs
 from upstream is rebase cost when a new tag lands, so local changes are additive
 and idiomatic to the files they touch. Two examples of that discipline, worth
 preserving if you extend this work:
