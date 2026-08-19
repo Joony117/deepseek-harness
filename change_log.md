@@ -18,6 +18,28 @@ Two repositories are involved:
 
 ---
 
+## 2026-08-19 — Local interrupt-and-steer command
+
+### W `9642faf` — Add local redirect command
+
+Added `plugins/command-redirect.mjs`, its four-case `node:test` suite, and an
+absolute `file:///E:/...` plugin entry in `deepseek-harness.yml`. `/redirect`
+constructs the replacement user message before cancellation, calls
+`agent.cancel({ kind: 'user' })` without `keepInbox`, then calls
+`agent.steer(message)` so the aborted driver latches exactly one next-turn wake.
+
+The `file:///` spelling is required on Windows. A raw `E:\\...` absolute path
+survived config parsing but failed at ESM import time with
+`ERR_UNSUPPORTED_ESM_URL_SCHEME`; the file URL loads in a real Web-profile boot.
+No Harness fork source changed and no rebuild was needed.
+
+Verification: command tests 4/4 passed; patched config dump succeeded; real
+Web profile booted; focused cancellation-convergence test passed (1 passed, 30
+skipped). The remaining live browser acceptance pass is tracked in `tasks.md`
+because the available in-app browser blocks localhost.
+
+---
+
 ## 2026-08-18 — Session delete button
 
 ### F `3ae22c5013` — docs: make the fork's git contract obvious to any agent

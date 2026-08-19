@@ -7,10 +7,10 @@
 > ```
 > (re-add these banners after copying, or just accept the canonical text)
 
-# Details — harness fork and session deletion
+# Details — local Harness deployment and fork
 
 Durable technical reference for the local DeepSeek Harness fork. Written
-2026-08-18. Companion files: [tasks.md](tasks.md),
+2026-08-18; updated 2026-08-19. Companion files: [tasks.md](tasks.md),
 [finished_tasks.md](finished_tasks.md), [change_log.md](change_log.md).
 
 ## Two repositories
@@ -23,6 +23,62 @@ Durable technical reference for the local DeepSeek Harness fork. Written
 The fork's git contract lives in `E:\deepseek-harness\FORK.md`, and its
 `AGENTS.md` carries a banner pointing there. Short version: never push, never
 commit on `master`, base tag is `dsh-v0.1.0-rc.7`.
+
+## Local `/redirect` interrupt-and-steer command
+
+The deployment registers `plugins/command-redirect.mjs` from
+`deepseek-harness.yml` as an absolute Windows file URL:
+
+```yaml
+- insert:
+    - id: command-redirect
+      name: 'file:///E:/Qwen3.8_27b/plugins/command-redirect.mjs'
+```
+
+Use `/redirect <instruction>` only while an agent reports `running`. The
+handler trims the argument, rejects empty input, and creates the user-sourced
+replacement message *before* aborting anything. It then performs:
+
+```js
+agent.cancel({ kind: 'user' })
+agent.steer(message)
+```
+
+Omitting `keepInbox` is deliberate: `cancel()` clears queued user and steering
+work. Because cancellation has already aborted the driver, the following
+`steer()` is classified by the existing agent loop as a latched next-turn wake;
+it runs after cancellation converges. `recordInput: false` prevents the slash
+command itself from being recorded as a duplicate user input—the replacement
+message is logged by the inbox and subsequent `user/message` path.
+
+### Interface and limits
+
+- Text only; slash-command arguments do not carry attachments.
+- Empty input returns `Redirect instructions are required. Usage: /redirect
+  <instruction>` without cancelling anything.
+- Idle use returns `No task is running. Use a normal message instead.`
+- Success immediately returns `Current task interrupted; redirect queued.`; it
+  does not wait for the replacement task to finish.
+- Cancellation is cooperative. A provider or tool that delays observing its
+  abort signal also delays the replacement turn.
+- Completed or already-started external side effects are not rolled back.
+- Repeated redirects during convergence have replace-all semantics: each
+  invocation clears pending inbox work, so the latest replacement wins.
+- No public TypeScript interface, event type, RPC, UI, or wire schema changed.
+
+### Verification (2026-08-19)
+
+| Check | Result |
+|---|---|
+| `node --test plugins/command-redirect.test.mjs` | 4 passed, 0 failed |
+| Fork CLI `--profile web --patch ... --dump-config` | exit 0; plugin present |
+| Real fork Web-profile startup against local Qwen | booted; plugin imported successfully |
+| `vitest ... cancel.spec.ts -t "a running-listener cancellation replays replacement work at convergence"` | 1 passed, 30 skipped |
+| Live browser acceptance | pending: Codex in-app browser policy blocks localhost and prohibited an alternate browser surface |
+
+The first runtime attempt used a raw `E:\\...` path. YAML accepted it, but
+Node's ESM loader interpreted `e:` as an unsupported URL scheme. The `file:///`
+form above is therefore part of the working design, not cosmetic formatting.
 
 ## Why a fork was necessary
 
