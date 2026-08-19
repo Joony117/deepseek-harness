@@ -12,9 +12,21 @@
 Completed work is in [finished_tasks.md](finished_tasks.md). Background for
 every item here is in [details.md](details.md).
 
-Nothing below is blocking; the session delete button is shipped and verified.
+Nothing below is blocking; the session delete button and local `/redirect`
+command are implemented.
 
 ---
+
+## Verification
+
+- [ ] **Complete one live `/redirect` browser acceptance pass.** From a browser
+      allowed to reach `http://127.0.0.1:3080`, start a long-running turn, queue
+      a sacrificial follow-up, then submit `/redirect change direction`. Confirm
+      the original turn is user-aborted, the follow-up is discarded, only the
+      redirect starts next, and idle/empty invocations create error command
+      rows without a model turn. Unit tests, config loading, real Web-profile
+      boot, and the focused cancellation-convergence test already pass; the
+      Codex in-app browser blocked localhost and prohibited a workaround.
 
 ## Housekeeping
 
