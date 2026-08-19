@@ -14,6 +14,37 @@ Completed work, newest first. Commit hashes and per-change rationale are in
 
 ---
 
+## Local `/redirect` interrupt-and-steer command — 2026-08-19
+
+**Goal.** Add a deployment-local slash command that replaces active work rather
+than merely appending guidance to the current turn.
+
+**Outcome.** `/redirect <instruction>` now rejects empty or idle use, cancels a
+running turn with user-abort semantics, clears all pending inbox work, and
+queues one normalized user message as the replacement turn. It lives entirely
+in the deployment plugin and configuration; no Harness source, public type,
+wire schema, dependency, or rebuild changed.
+
+### Verified
+
+- [x] Plugin unit suite: 4 passed, 0 failed
+- [x] Patched configuration resolves the absolute plugin entry
+- [x] Real fork Web profile boots with the plugin loaded
+- [x] Focused Harness cancellation-convergence regression: 1 passed, 30 skipped
+- [ ] Live browser interaction remains in [tasks.md](tasks.md); the Codex
+      in-app browser blocks localhost and explicitly prohibited an alternate
+      browser workaround
+
+### Limits
+
+The command accepts text only and acknowledges admission immediately.
+Cancellation is cooperative, so an abort-insensitive provider or tool can delay
+the replacement turn. External side effects already started are not rolled
+back. Repeated redirects during cancellation are replace-all: the latest
+invocation clears the earlier pending replacement.
+
+---
+
 ## Session delete button for the harness Web UI — 2026-08-18
 
 **Goal.** Add a GUI action to delete a persisted session from the DeepSeek
