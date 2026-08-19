@@ -2445,6 +2445,11 @@ function createFixtureWorld(options: FixtureOptions): FixtureWorld {
         }
         return ok(request, { sessionId: child.sessionId })
       },
+      delete: request => err(request, {
+        code: 'session-delete-unsupported',
+        message: 'the in-memory fixture does not provide durable session deletion',
+        details: { sessionId: request.payload.sessionId },
+      }),
       history: async (request) => {
         const log = logs.get(request.payload.sessionId) ?? []
         // Snapshot at request time, deliver after the transit delay (mirrors a real host under latency).
@@ -3183,6 +3188,7 @@ export class FixtureApiClient extends AbstractApiClient {
       case 'session.selectModel': return this.api.sessions.selectModel(request)
       case 'session.rename': return this.api.sessions.rename(request)
       case 'session.fork': return this.api.sessions.fork(request)
+      case 'session.delete': return this.api.sessions.delete(request, signal)
       case 'session.prompt': return this.api.sessions.prompt(request)
       case 'session.attachment': return this.api.sessions.attachment(request)
       case 'session.updateQueue': return this.api.sessions.updateQueue(request)

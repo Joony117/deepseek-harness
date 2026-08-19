@@ -9,7 +9,7 @@
 import { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import { readdirSync } from 'node:fs'
-import { open, mkdir, readFile, readdir, realpath, link, rm, stat, truncate } from 'node:fs/promises'
+import { open, mkdir, readFile, readdir, realpath, link, lstat, rm, stat, truncate, unlink } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import { performance } from 'node:perf_hooks'
 import { scheduler } from 'node:timers/promises'
@@ -120,6 +120,7 @@ function isENOENT(error: unknown): boolean {
  */
 export class JsonlSessionPersistence extends SessionPersistence implements PersistenceBackend<JsonlTornMarker> {
   override readonly supportsRawArtifacts = true
+  override readonly supportsDeletion = true
 
   static inject = ['sessions']
 
@@ -179,6 +180,27 @@ export class JsonlSessionPersistence extends SessionPersistence implements Persi
 
   append(id: SessionId, events: readonly SessionEvent[]): Promise<void> {
     return this.coordinator.append(id, events)
+  }
+
+  override delete(id: SessionId, signal?: AbortSignal): Promise<void> {
+    return this.coordinator.delete(id, async () => {
+      signal?.throwIfAborted()
+      await this.ensureRootEncoding()
+      signal?.throwIfAborted()
+      const path = await this.findLog(id, signal)
+      if (path === undefined) return
+      await this.readPrefix(path, id, signal)
+      signal?.throwIfAborted()
+      const dir = dirname(path)
+      try {
+        const identity = await lstat(dir)
+        signal?.throwIfAborted()
+        if (identity.isSymbolicLink()) await unlink(dir)
+        else await rm(dir, { recursive: true })
+      } catch (error: unknown) {
+        if (!isENOENT(error)) throw error
+      }
+    }, signal)
   }
 
   override prepare(id: SessionId, signal?: AbortSignal): Promise<SessionPreparation> {

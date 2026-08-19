@@ -287,6 +287,62 @@ describe('JsonlSessionPersistence: durability and crash semantics', () => {
     expect((await ctx.sessionPersistence.list()).map(h => h.id)).toContain(m.id)
   })
 
+  it('deletes a materialized session directory and removes it from listings', async () => {
+    const m = meta('delete-materialized', '/work')
+    await ctx.sessionPersistence.create(m)
+    await ctx.sessionPersistence.append(m.id, oneTurnLog())
+    const dir = sessionDir(root, m.cwd, m.id)
+
+    await ctx.sessionPersistence.delete(m.id)
+
+    await expect(stat(dir)).rejects.toMatchObject({ code: 'ENOENT' })
+    expect((await ctx.sessionPersistence.list()).map(header => header.id)).not.toContain(m.id)
+    expect((await ctx.sessionPersistence.listSnapshots()).map(snapshot => snapshot.header.id)).not.toContain(m.id)
+  })
+
+  it('refuses deletion when the stored header does not identify the requested session', async () => {
+    const m = meta('delete-identity-a', '/same')
+    await ctx.sessionPersistence.create(m)
+    await ctx.sessionPersistence.append(m.id, oneTurnLog())
+    const path = rawLogPath(root, m.cwd, m.id)
+    await rewriteHeader(path, (header) => { header.id = 'delete-identity-b' })
+    const before = await readFile(path)
+
+    await expect(ctx.sessionPersistence.delete(m.id))
+      .rejects.toThrow(/requested id "delete-identity-a" does not match header id "delete-identity-b"/)
+    expect(await readFile(path)).toEqual(before)
+  })
+
+  it('refuses deletion while a same-session append is in flight', async () => {
+    const m = meta('delete-pending', '/work')
+    await ctx.sessionPersistence.create(m)
+    await ctx.sessionPersistence.append(m.id, oneTurnLog())
+    const backend = ctx.sessionPersistence as JsonlSessionPersistence
+    const original = backend.appendBatch.bind(backend)
+    const started = Promise.withResolvers<undefined>()
+    const release = Promise.withResolvers<undefined>()
+    vi.spyOn(backend, 'appendBatch').mockImplementation(async (...args) => {
+      started.resolve(undefined)
+      await release.promise
+      await original(...args)
+    })
+    const pending = backend.append(m.id, [{
+      type: 'turn/start',
+      seq: oneTurnLog().length,
+      time: 10,
+      data: { turn: 2 },
+    }])
+    await started.promise
+
+    try {
+      await expect(backend.delete(m.id)).rejects.toThrow(/persistence work is pending/)
+      expect((await stat(sessionDir(root, m.cwd, m.id))).isDirectory()).toBe(true)
+    } finally {
+      release.resolve(undefined)
+      await pending
+    }
+  })
+
   it('readRaw returns the stored artifact text verbatim with its original filename', async () => {
     const m = meta('raw-read', '/work')
     await ctx.sessionPersistence.create(m)

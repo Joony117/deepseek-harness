@@ -76,6 +76,7 @@ function mount(overrides: Partial<WorkspaceBrowserProps> = {}) {
     renameWorkspace: vi.fn(async () => {}),
     deleteWorkspace: vi.fn(async () => {}),
     archiveSession: vi.fn(async () => {}),
+    deleteSession: vi.fn(async () => {}),
     insertWorkspaceBefore: vi.fn(async () => {}),
     insertSessionBefore: vi.fn(async () => {}),
     createWorkspace: vi.fn(async () => workspace('created', [])),
@@ -355,6 +356,46 @@ describe('WorkspaceBrowser', () => {
     fireEvent.click(screen.getByRole('menuitem', { name: '单列表' }))
     expect(screen.getByText('kept-s')).toBeTruthy()
     expect(screen.queryByText('gone-s')).toBeNull()
+  })
+
+  it('confirms session deletion, blocks duplicate submission, and closes on success', async () => {
+    let resolveDelete!: () => void
+    const deleteSession = vi.fn(() => new Promise<void>((resolve) => { resolveDelete = resolve }))
+    mount({
+      useSessions: hook(sessionState([summary('gone-s', 1, { displayTitle: 'Gone' })])),
+      useWorkspaces: hook(workspaceState([workspace('alpha', ['gone-s'])])),
+      deleteSession,
+    })
+    fireEvent.click(screen.getByText('alpha'))
+    fireEvent.click(screen.getByRole('button', { name: '会话“Gone”的操作' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: '删除会话' }))
+    const dialog = screen.getByRole('dialog', { name: '删除会话' })
+    expect(dialog.textContent).toContain('将永久删除“Gone”的会话记录')
+    const confirm = screen.getByRole<HTMLButtonElement>('button', { name: '删除会话' })
+    fireEvent.click(confirm)
+    fireEvent.click(confirm)
+    expect(deleteSession).toHaveBeenCalledOnce()
+    expect(deleteSession).toHaveBeenCalledWith(sid('gone-s'))
+    expect(confirm.disabled).toBe(true)
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: '取消' }).disabled).toBe(true)
+    expect(screen.getByRole('status').textContent).toBe('正在删除会话…')
+    await act(async () => { resolveDelete() })
+    expect(screen.queryByRole('dialog', { name: '删除会话' })).toBeNull()
+  })
+
+  it('keeps the session delete dialog open on failure', async () => {
+    const deleteSession = vi.fn(async () => { throw new Error('session storage unavailable') })
+    mount({
+      useSessions: hook(sessionState([summary('gone-s', 1, { displayTitle: 'Gone' })])),
+      useWorkspaces: hook(workspaceState([workspace('alpha', ['gone-s'])])),
+      deleteSession,
+    })
+    fireEvent.click(screen.getByText('alpha'))
+    fireEvent.click(screen.getByRole('button', { name: '会话“Gone”的操作' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: '删除会话' }))
+    fireEvent.click(screen.getByRole('button', { name: '删除会话' }))
+    await waitFor(() => { expect(screen.getByRole('alert').textContent).toBe('session storage unavailable') })
+    expect(screen.getByRole('dialog', { name: '删除会话' })).toBeTruthy()
   })
 
   it('logs and keeps the tree when the archive call rejects', async () => {

@@ -338,6 +338,18 @@ export interface SessionsApi {
   Promise<RpcResponse<{ sessionId: SessionId }>>
 
   /**
+   * Durably deletes one detached persisted session. Attached sessions fail
+   * with `session-delete-unavailable`; persistence backends without deletion
+   * support fail with `session-delete-unsupported`; unknown ids fail with
+   * `session-not-found`. Success resolves only after the backend confirms the
+   * deletion, and cancellation fails with `cancelled`.
+   */
+  delete(
+    request: RpcRequest<{ sessionId: SessionId }>,
+    signal: AbortSignal,
+  ): Promise<RpcResponse<{ deleted: true }>>
+
+  /**
    * Sends text and temporary image bytes to an ordinary session Agent after durable host admission.
    * Browser callers attach their current IANA zone;
    * the Host validates, canonicalizes, and records it on that exact user message. Omission remains
