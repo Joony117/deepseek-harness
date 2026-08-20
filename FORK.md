@@ -6,7 +6,8 @@ not exist upstream, and `origin` is the **real upstream repository**.
 | Fact | Value |
 |---|---|
 | Working branch | `delete-session` — all local work lives here |
-| Fork base | tag `dsh-v0.1.0-rc.7` (= upstream `master` at clone time) |
+| Fork base | tag `dsh-v0.1.0-rc.8` (`141eb6fef8`) |
+| Rollback branch | `codex/delete-session-rc7-backup` (`bec6782544`) |
 | Upstream default branch | `master` (**not** `main`) |
 | `origin` | `https://github.com/deepseek-ai/deepseek-harness.git` — upstream, not a fork of ours |
 | Consumed by | `E:\Qwen3.8_27b\run-dsh-fork.ps1`, which runs `apps/cli/lib/bin.js` |
@@ -47,8 +48,11 @@ preserving if you extend this work:
 
 ```sh
 git fetch origin --tags
-git rebase dsh-v0.1.0-rc.8 delete-session   # substitute the new tag
-corepack pnpm install
+git rebase --onto dsh-v0.1.0-rc.9 dsh-v0.1.0-rc.8 delete-session
+corepack pnpm install --frozen-lockfile
+corepack pnpm run gen-cordis-catalog
+corepack pnpm run verify-cordis-catalog
+corepack pnpm run typecheck
 corepack pnpm run build
 corepack pnpm exec vitest run packages/host/apiproxy packages/session/session-persistence-jsonl packages/client/ui-workspace
 ```
