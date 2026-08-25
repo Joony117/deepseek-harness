@@ -22,6 +22,14 @@ const DEFAULT_THRESHOLD_RATIO = 0.8
 /** Default verbatim-tail fraction for every routed model. */
 const DEFAULT_RETAIN_RATIO = 0.16
 
+/**
+ * Default output cap for one summarization call. A structured checkpoint over
+ * a large surface does not fit the older 8,192-token budget once a model
+ * spends any of it on preamble or reasoning, and a cap reached mid-checkpoint
+ * fails the whole compaction. Overridable per deployment and per model policy.
+ */
+const DEFAULT_SUMMARY_MAX_TOKENS = 16_384
+
 /** Fields shared by top-level defaults and exact-target overrides. */
 const POLICY_CONFIG_KEYS = [
   'thresholdRatio',
@@ -88,7 +96,7 @@ export function resolveConfig(config: BasicCompactionConfig = {}): ResolvedConfi
     ...retention,
     summarizationProvider: config.summarizationProvider ?? '',
     summarizationModel: config.summarizationModel ?? '',
-    maxTokens: config.maxTokens ?? 8192,
+    maxTokens: config.maxTokens ?? DEFAULT_SUMMARY_MAX_TOKENS,
     compactionRetries: config.compactionRetries ?? 1,
     maxOverflowRetries: config.maxOverflowRetries ?? 1,
     modelPolicies,

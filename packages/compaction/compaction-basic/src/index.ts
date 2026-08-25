@@ -4,9 +4,10 @@
  * @module @deepseek-ai/dsh-compaction-basic
  */
 
+import { randomUUID } from 'node:crypto'
 import { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
-import { CompactionEngine, ManualCompactionError } from '@deepseek-ai/dsh-compaction'
+import { CompactionEngine, CompactionId, ManualCompactionError } from '@deepseek-ai/dsh-compaction'
 import type { CompactionResult, CompactionTrigger } from '@deepseek-ai/dsh-compaction'
 import type { TokenMeter } from '@deepseek-ai/dsh-token-meter'
 import type { Session } from '@deepseek-ai/dsh-session'
@@ -68,6 +69,33 @@ function conversationTarget(
   if (agent.options.provider === undefined || agent.options.provider.length === 0
     || agent.options.model === undefined || agent.options.model.length === 0) return undefined
   return { provider: agent.options.provider, model: agent.options.model }
+}
+
+/**
+ * Whether this compaction attempt already left the session a durable compaction
+ * trace, or left one open.
+ *
+ * A failure inside the region transaction closes its own bracket carrying the
+ * error, and a bracket whose close itself failed is deliberately left as a
+ * detectable unmatched `compaction/start`. Appending a synthetic marker pair
+ * over the first would report one failure twice; over the second it would look
+ * like a matched bracket and silently repair a lock the region left broken on
+ * purpose. A bracket this attempt closed *successfully* is not a trace of the
+ * failure — a retry budget spent while still above threshold ends exactly that
+ * way — so it does not suppress the record.
+ * @param session - session whose durable log is inspected.
+ * @param from - log length captured before the attempt began.
+ * @returns true when nothing further should be appended for this failure.
+ */
+function attemptLeftDurableTrace(session: Session, from: number): boolean {
+  const events = session.events
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    // oxlint-disable-next-line typescript/no-non-null-assertion
+    const event = events[index]!
+    if (event.type === 'compaction/start') return true
+    if (event.type === 'compaction/end') return index >= from && event.data.error !== undefined
+  }
+  return false
 }
 
 const thresholdRatioSchema = z.number()
@@ -145,10 +173,11 @@ export class BasicCompactionEngine extends CompactionEngine {
     }
 
     ctx.on('agent/pre-step', async (
-      { agent, signal },
+      { agent, turn, signal },
       next,
     ): Promise<PreStepDecision> => {
       if (!signal.aborted) {
+        const from = agent.session.events.length
         try {
           const result = await this.compactIfNeeded(agent, 'pressure', signal)
           if (result !== null) logResult(result, 'step pressure')
@@ -159,6 +188,8 @@ export class BasicCompactionEngine extends CompactionEngine {
           }
           const message = error instanceof Error ? error.message : String(error)
           ctx.logger.warn(`step compaction failed: ${message}; continuing the turn`)
+          // oxlint-disable-next-line typescript/no-unnecessary-condition -- the signal can abort while compaction is awaited.
+          if (!signal.aborted) this.recordAutomaticFailure(agent.session, turn, 'step pressure', error, from)
         }
       }
       return next()
@@ -177,7 +208,7 @@ export class BasicCompactionEngine extends CompactionEngine {
     })
 
     ctx.on('agent/request-error', async (
-      { agent, failure, signal },
+      { agent, turn, failure, signal },
       next,
     ) => {
       if (failure.code !== CONTEXT_WINDOW_EXCEEDED_CODE || signal.aborted) return next()
@@ -189,6 +220,7 @@ export class BasicCompactionEngine extends CompactionEngine {
       if (retries >= policy.maxOverflowRetries) return next()
 
       const generation = agent.session.surface.replaceGeneration
+      const from = agent.session.events.length
       let result: CompactionResult | null
       try {
         result = await this.compactIfNeeded(agent, 'context-overflow', signal)
@@ -203,6 +235,7 @@ export class BasicCompactionEngine extends CompactionEngine {
             `context-overflow compaction failed after durable surface progress: ${message}; `
             + 'retrying from the replacement surface',
           )
+          this.recordAutomaticFailure(agent.session, turn, 'context overflow recovery', recoveryError, from)
           this.overflowRetries.set(agent, retries + 1)
           return { kind: 'retry' }
         }
@@ -212,6 +245,10 @@ export class BasicCompactionEngine extends CompactionEngine {
             ? 'cancellation prevents retry'
             : 'preserving the original request error'}`,
         )
+        // oxlint-disable-next-line typescript/no-unnecessary-condition -- the signal can abort while recovery is awaited.
+        if (!signal.aborted) {
+          this.recordAutomaticFailure(agent.session, turn, 'context overflow recovery', recoveryError, from)
+        }
         return next()
       }
       // oxlint-disable-next-line typescript/no-unnecessary-condition -- the signal can abort while compaction is awaited.
@@ -415,6 +452,54 @@ export class BasicCompactionEngine extends CompactionEngine {
         'busy',
         'manual compaction requires an idle agent with no waking queued work',
         { cause: error },
+      )
+    }
+  }
+
+  /**
+   * Surface one automatic-path compaction failure on the session's own
+   * compaction lifecycle, so it reaches a reader of the session instead of
+   * living only in this process's log.
+   *
+   * The automatic triggers swallow every failure to keep the turn alive, which
+   * is right — but a failure that never reached the region transaction (an
+   * unconfigured routed capacity, a retry budget spent still above threshold,
+   * a selection or metering fault) leaves no durable trace at all, and the turn
+   * continues silently degraded. A closed `compaction/start`/`compaction/end`
+   * pair carrying the error is the record the region transaction already writes
+   * for its own failures, and the presentation layer already renders it as a
+   * failed compaction.
+   *
+   * Advisory by construction: it records nothing for a cancelled attempt or one
+   * already traced, it never throws, and it never influences what the calling
+   * hook decides next.
+   * @param session - session whose durable log receives the marker pair.
+   * @param turn - the turn the failed attempt belonged to.
+   * @param trigger - which automatic trigger failed, for the recorded message.
+   * @param error - the swallowed failure.
+   * @param from - log length captured before the attempt began.
+   */
+  private recordAutomaticFailure(
+    session: Session,
+    turn: number,
+    trigger: string,
+    error: unknown,
+    from: number,
+  ): void {
+    try {
+      if (attemptLeftDurableTrace(session, from)) return
+      const message = error instanceof Error ? error.message : String(error)
+      const lifecycle = { compactionId: CompactionId(randomUUID()), turn }
+      session.append('compaction/start', lifecycle)
+      session.append('compaction/end', {
+        ...lifecycle,
+        error: `automatic compaction (${trigger}) failed: ${message}`,
+      })
+    } catch (recordError: unknown) {
+      // Reporting a failure must never become one: the turn continues either way.
+      this.ctx.logger.warn(
+        `compaction-basic: could not record the ${trigger} compaction failure: `
+        + `${recordError instanceof Error ? recordError.message : String(recordError)}`,
       )
     }
   }

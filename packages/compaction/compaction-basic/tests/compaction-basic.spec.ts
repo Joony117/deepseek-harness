@@ -12,7 +12,7 @@ import {
   resolveTargetPolicy,
 } from '@deepseek-ai/dsh-compaction-basic/src/config.ts'
 import type { CompactionResult } from '@deepseek-ai/dsh-compaction'
-import LlmRuntime, { createUserMessage, CallId, CONTEXT_WINDOW_EXCEEDED_CODE, createToolResultMessage, LlmAdapter , createMessage } from '@deepseek-ai/dsh-llm'
+import LlmRuntime, { createUserMessage, CallId, CONTEXT_WINDOW_EXCEEDED_CODE, createToolResultMessage, LlmAdapter , createMessage, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import type {
   ContentBlock,
   GenerateOptions,
@@ -293,7 +293,7 @@ describe('compact configuration and defaults', () => {
       retainRatio: 0.16,
       summarizationProvider: '',
       summarizationModel: '',
-      maxTokens: 8192,
+      maxTokens: 16_384,
       compactionRetries: 1,
       maxOverflowRetries: 1,
       modelPolicies: [],
@@ -1112,12 +1112,29 @@ describe('compaction region transaction', () => {
 class ScriptedAdapter extends LlmAdapter {
   lastOptions: GenerateOptions | undefined
   usage: TokenUsage | undefined
+  /** Reasoning levels this route advertises; absent keeps the model non-reasoning. */
+  reasoningEfforts: readonly string[] | undefined
 
   constructor(
     private readonly blocks: readonly ContentBlock[],
     private readonly finish: (StreamChunk & { type: 'finish' })['reason'] = { kind: 'stop' },
   ) {
     super()
+  }
+
+  override resolveModel(provider: string, model: string): Promise<LlmResolvedModelInfo> {
+    return Promise.resolve({
+      provider,
+      id: model,
+      name: model,
+      ...this.reasoningEfforts === undefined
+        ? {}
+        : {
+          reasoning: {
+            efforts: this.reasoningEfforts.map(id => ({ id: ReasoningEffortId(id), name: id })),
+          },
+        },
+    })
   }
 
   override async * stream(options: GenerateOptions): AsyncIterable<StreamChunk> {
@@ -1177,6 +1194,56 @@ describe('default one-shot summarizer', () => {
       provider: string
       model: string
     }>().not.toExtend<SummaryResult>()
+  })
+
+  it('asks a route that advertises one for the no-thinking level', async () => {
+    const { adapter, compact } = await summarizerHarness(
+      [{ type: 'text', text: 'checkpoint' }],
+      undefined,
+      MODEL,
+      { auto: false, summarizationProvider: MODEL, summarizationModel: MODEL },
+    )
+    adapter.reasoningEfforts = ['off', 'low', 'high']
+
+    await compact.runSummarize(promptInput('transcript'), agent(conversation(1), 'fallback'))
+
+    expect(adapter.lastOptions?.reasoningEffort).toBe('off')
+    // The raised default cap reaches the request unchanged.
+    expect(adapter.lastOptions?.maxTokens).toBe(16_384)
+  })
+
+  it('leaves the request untouched when the route advertises no no-thinking level', async () => {
+    const { adapter, compact } = await summarizerHarness(
+      [{ type: 'text', text: 'checkpoint' }],
+      undefined,
+      MODEL,
+      { auto: false, summarizationProvider: MODEL, summarizationModel: MODEL },
+    )
+    // A reasoning model offering only thinking levels, then a non-reasoning one.
+    adapter.reasoningEfforts = ['low', 'high']
+    await compact.runSummarize(promptInput('transcript'), agent(conversation(1), 'fallback'))
+    expect(adapter.lastOptions).not.toHaveProperty('reasoningEffort')
+
+    adapter.reasoningEfforts = undefined
+    await compact.runSummarize(promptInput('transcript'), agent(conversation(1), 'fallback'))
+    expect(adapter.lastOptions).not.toHaveProperty('reasoningEffort')
+  })
+
+  it('summarizes unchanged when the capability lookup itself fails', async () => {
+    const { ctx, adapter, compact } = await summarizerHarness(
+      [{ type: 'text', text: 'checkpoint' }],
+      undefined,
+      MODEL,
+      { auto: false, summarizationProvider: MODEL, summarizationModel: MODEL },
+    )
+    // Only the advisory lookup fails; the stream seam stays healthy, as it
+    // would on a context whose LLM double never implemented the lookup.
+    vi.spyOn(ctx.llm, 'resolveModelInfo')
+      .mockRejectedValue(new Error('capability lookup unavailable'))
+
+    await expect(compact.runSummarize(promptInput('transcript'), agent(conversation(1), 'fallback')))
+      .resolves.toMatchObject({ summary: [{ type: 'text', text: 'checkpoint' }] })
+    expect(adapter.lastOptions).not.toHaveProperty('reasoningEffort')
   })
 
   it('uses configured model/default cap, forwards cancellation, and keeps only safe text', async () => {
@@ -1531,6 +1598,45 @@ describe('automatic listener and loader composition', () => {
     expect(warnings).toEqual([
       expect.stringContaining(`no context capacity for ${MODEL}/${MODEL}`),
     ])
+  })
+
+  it('records an automatic failure that never opened a region as a failed compaction', async () => {
+    const ctx = createContext()
+    ctx.logger.warn = (() => undefined) as typeof ctx.logger.warn
+    vi.spyOn(ctx.llm, 'resolveModelInfo').mockImplementation((provider, model) => Promise.resolve({
+      provider,
+      id: model,
+      name: model,
+    }))
+    void new TestCompactionEngine(ctx, { thresholdRatio: 0.5, retainTokens: 180 })
+    const session = conversation(4)
+
+    await expect(preStep(ctx, agent(session, MODEL))).resolves.toEqual({ kind: 'enter', messages: [] })
+
+    const start = session.events.find(event => event.type === 'compaction/start')
+    const end = session.events.find(event => event.type === 'compaction/end')
+    // The marker pair belongs to the step's own turn, as the pre-step payload states it.
+    expect(start?.data.turn).toBe(1)
+    expect(end?.data).toMatchObject({
+      compactionId: start?.data.compactionId,
+      error: expect.stringContaining(`no context capacity for ${MODEL}/${MODEL}`),
+    })
+    expect(session.events.some(event => event.type === 'compaction/summary')).toBe(false)
+  })
+
+  it('does not double-record a failure the region transaction already closed', async () => {
+    const ctx = createContext()
+    ctx.logger.warn = (() => undefined) as typeof ctx.logger.warn
+    const compact = new TestCompactionEngine(ctx, { thresholdRatio: 0.5, retainTokens: 180 })
+    compact.error = new Error('summarization truncated at the token cap (incomplete checkpoint)')
+    const session = conversation(4)
+
+    await preStep(ctx, agent(session, MODEL))
+
+    const ends = session.events.filter(event => event.type === 'compaction/end')
+    expect(ends).toHaveLength(1)
+    // oxlint-disable-next-line typescript/no-non-null-assertion
+    expect(ends[0]!.data.error).toContain('summarization truncated at the token cap')
   })
 
   it('warns once per routed target when absolute retention exceeds its resolved threshold', async () => {
