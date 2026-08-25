@@ -396,6 +396,7 @@ export function SessionNodeItem({ node, currentId, now, onOpen, onRename, onFork
     { id: 'archive', label: t('menu.archiveSession'), icon: <IconArchiveOutline20 size={16} /> },
     { id: 'delete', label: t('menu.deleteSession'), icon: <IconTrashOutline16 />, danger: true },
   ]
+  const blankMenuItems = sessionMenuItems.filter(item => item.id === 'delete')
   // Figma session cell: pad 8, status slot 16, then a 4px title gap.
   const ownRow = (
     <div
@@ -441,23 +442,23 @@ export function SessionNodeItem({ node, currentId, now, onOpen, onRename, onFork
         </span>
       )}
       <span className={css.title}>{title}</span>
-      {/* A blank New Session row is a provisional placeholder: nothing has
-          happened in it yet, so a "now" timestamp and the row verbs
-          (rename/fork/archive) would all act on content that does not
-          exist — both trailing cells stay off until the first prompt. */}
+      {/* Rename/fork/archive stay off because they act on absent content.
+          Delete targets the session log itself, which a command-only blank
+          session does have; the host refuses an unmaterialized blank with
+          session-not-found. */}
       {!row.blank && <span className={css.time}>{timeLabel(row.updatedAt, now, t)}</span>}
-      {!row.blank && (
+      {(!row.blank || onDelete !== undefined) && (
         <span className={css.rowActions}>
           <Menu
             open={menuOpen}
             onClose={() => { setMenuOpen(false) }}
-            items={sessionMenuItems}
+            items={row.blank ? blankMenuItems : sessionMenuItems}
             onSelect={(id) => {
               setMenuOpen(false)
               if (id === 'rename') onRename(node.id, row.title)
               if (id === 'fork') onFork(node.id)
               if (id === 'archive') onArchive(node.id)
-              if (id === 'delete') onDelete?.(node.id, row.title)
+              if (id === 'delete') onDelete?.(node.id, title)
             }}
             portal
             closeOnPointerLeave

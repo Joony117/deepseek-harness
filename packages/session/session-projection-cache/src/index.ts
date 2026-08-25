@@ -67,6 +67,8 @@ interface DirtyState {
  * cold-read ladder: cached row, persistence `readFrom` tail, registry
  * `restore`, durable write-back. Every durable write is fail-soft: failures
  * log a warning and the cache self-heals on the next write or cold read.
+ * `cleanup` deletes only cache rows whose ids are absent from
+ * persistence `list`; it never removes a session log.
  */
 export class SessionProjectionCache extends Service {
   static inject = ['storageDomain', 'sessionProjections', 'sessionPersistence', 'sessions']
@@ -193,6 +195,35 @@ export class SessionProjectionCache extends Service {
     }
     await this.putSoft(id, identityOf(tail.meta), restored.checkpoint, 'cold-read write-back')
     return restored.snapshot
+  }
+
+  /**
+   * Drop cache rows whose session ids are absent from persistence `list` —
+   * the authoritative valid-session set. Snapshots table keys, then awaits
+   * `list(signal)` before any mutation, so a listing or cancellation failure
+   * leaves every row untouched. A row is stale only when that list omits its
+   * id; `ctx.sessions` residency, log identity, and session directories are
+   * not consulted. `dryRun: true` reports stale ids and performs zero
+   * deletes. Apply mode calls only {@link KvTable.delete} for those ids;
+   * `deleted` is the subset that actually existed. Never calls persistence
+   * `delete`.
+   * @param options - required `dryRun`; optional `signal` forwarded to `list`.
+   * @returns stale ids in sorted order, and the ids actually removed (empty
+   *   on dry-run).
+   */
+  async cleanup(
+    options: { dryRun: boolean; signal?: AbortSignal },
+  ): Promise<{ stale: SessionId[]; deleted: SessionId[] }> {
+    const table = this.requireTable()
+    const cachedIds = [...table.keys()]
+    const valid = new Set((await this.ctx.sessionPersistence.list(options.signal)).map(header => header.id))
+    const stale = cachedIds.filter(id => !valid.has(id)).sort()
+    if (options.dryRun) return { stale, deleted: [] }
+    const deleted: SessionId[] = []
+    for (const id of stale) {
+      if (await table.delete(id)) deleted.push(id)
+    }
+    return { stale, deleted }
   }
 
   // --- write-behind (throttle + mandatory points) ---

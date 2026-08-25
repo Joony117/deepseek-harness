@@ -112,7 +112,7 @@ Generated from source by `scripts/gen-cordis-catalog.ts` (verified fresh by `pnp
 
 ### `ctx.sessionProjectionCache` — `SessionProjectionCache`
 
-The persisted projection cache service. Opens the `session_projcache` domain at init, checkpoints live sessions on a throttled write-behind (count/interval triggers from Config) plus two mandatory points — `turn/end` and session disposal (the live-to-cold moment) — and serves the cold-read ladder: cached row, persistence `readFrom` tail, registry `restore`, durable write-back. Every durable write is fail-soft: failures log a warning and the cache self-heals on the next write or cold read.
+The persisted projection cache service. Opens the `session_projcache` domain at init, checkpoints live sessions on a throttled write-behind (count/interval triggers from Config) plus two mandatory points — `turn/end` and session disposal (the live-to-cold moment) — and serves the cold-read ladder: cached row, persistence `readFrom` tail, registry `restore`, durable write-back. Every durable write is fail-soft: failures log a warning and the cache self-heals on the next write or cold read. `cleanup` deletes only cache rows whose ids are absent from persistence `list`; it never removes a session log.
 
 ```ts cordis-catalog
 /**
@@ -152,6 +152,22 @@ async write(session: Session): Promise<void>
  * @returns the snapshot cut at the stored log end.
  */
 async coldSnapshot(id: SessionId, signal?: AbortSignal): Promise<ProjectionSnapshot>
+
+/**
+ * Drop cache rows whose session ids are absent from persistence `list` —
+ * the authoritative valid-session set. Snapshots table keys, then awaits
+ * `list(signal)` before any mutation, so a listing or cancellation failure
+ * leaves every row untouched. A row is stale only when that list omits its
+ * id; `ctx.sessions` residency, log identity, and session directories are
+ * not consulted. `dryRun: true` reports stale ids and performs zero
+ * deletes. Apply mode calls only {@link KvTable.delete} for those ids;
+ * `deleted` is the subset that actually existed. Never calls persistence
+ * `delete`.
+ * @param options - required `dryRun`; optional `signal` forwarded to `list`.
+ * @returns stale ids in sorted order, and the ids actually removed (empty
+ *   on dry-run).
+ */
+async cleanup( options: { dryRun: boolean; signal?: AbortSignal }, ): Promise<{ stale: SessionId[]; deleted: SessionId[] }>
 ```
 
 Types: [Session](session.md) · [SessionHeader](persistence.md) · [SessionId](core.md)

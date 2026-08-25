@@ -6,8 +6,10 @@ not exist upstream, and `origin` is the **real upstream repository**.
 | Fact | Value |
 |---|---|
 | Working branch | `delete-session` — all local work lives here |
-| Fork base | tag `dsh-v0.1.0-rc.8` (`141eb6fef8`) |
-| Rollback branch | `codex/delete-session-rc7-backup` (`bec6782544`) |
+| Fork base | tag `dsh-v0.1.1-rc.2` (`b150a551b8`) |
+| Rebased HEAD | `f54cc39d51` (eight local commits replayed onto rc.2) |
+| Rollback ref (pre-rebase) | `codex/delete-session-rc8-backup-20260821` (`8ff3db4449`) |
+| Older rollback | `codex/delete-session-rc7-backup` (`bec6782544`) |
 | Upstream default branch | `master` (**not** `main`) |
 | `origin` | `https://github.com/deepseek-ai/deepseek-harness.git` — upstream, not a fork of ours |
 | Consumed by | `E:\Qwen3.8_27b\run-dsh-fork.ps1`, which runs `apps/cli/lib/bin.js` |
@@ -48,18 +50,32 @@ preserving if you extend this work:
 
 ```sh
 git fetch origin --tags
-git rebase --onto dsh-v0.1.0-rc.9 dsh-v0.1.0-rc.8 delete-session
+git rebase --onto <new-tag> dsh-v0.1.1-rc.2 delete-session
 corepack pnpm install --frozen-lockfile
 corepack pnpm run gen-cordis-catalog
 corepack pnpm run verify-cordis-catalog
 corepack pnpm run typecheck
 corepack pnpm run build
-corepack pnpm exec vitest run packages/host/apiproxy packages/session/session-persistence-jsonl packages/client/ui-workspace
+corepack pnpm exec vitest run packages/host/apiproxy/tests packages/session/session-persistence/tests packages/session/session-persistence-jsonl/tests packages/session/session-projection-cache/tests packages/client/ui-workspace/tests
 ```
+
+Use explicit `.../tests` paths: a bare `packages/session/session-persistence`
+filter substring-matches `session-persistence-sqlite`.
 
 Expect conflicts in the api-proxy wire files and
 `packages/client/ui-workspace/src/client/rows/Rows.tsx`; the persistence-seam
-addition is small and additive and usually applies cleanly.
+addition is small and additive and usually applies cleanly. Treat the new tag as
+the base: keep upstream documentation and catalog Source links, then append
+local session-deletion semantics. Regenerate
+`packages/extensions/tool-cordis/src/api-catalog.ts` rather than hand-merging
+it. Keep the new lockfile structure; retain the apiproxy JSONL test dependency.
+
+To roll this rebase back without rewriting later work, reset `delete-session`
+to `codex/delete-session-rc8-backup-20260821` (`8ff3db4449`) only after asking.
+The ignored file archive is
+`E:\deepseek-harness\.agent-results\rebase-backup-20260821-rc2` (SHA-256
+manifest included). Stash `d84cb424780ce5f4128d868c9c29dfe1925faecc` still
+holds the pre-rebase dirty tree; apply, do not pop, if a retry is needed.
 
 **A green test suite is not proof this feature works.** Both defects fixed in
 `f57dd99bba` passed every unit test, because the tests compose a mocked cordis

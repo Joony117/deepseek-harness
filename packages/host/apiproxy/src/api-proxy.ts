@@ -10,7 +10,7 @@ import { dirname } from 'node:path'
 import { z as zod } from 'zod'
 import type { Context } from '@deepseek-ai/cordis'
 import { installModelSelection } from '@deepseek-ai/dsh-agent'
-import type { Agent, ModelSelection, ModelSelectionRef, AgentOptions, AgentStatus } from '@deepseek-ai/dsh-agent'
+import type { Agent, AgentHandle, ModelSelection, ModelSelectionRef, AgentOptions, AgentStatus } from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-agent-presets/types'
 import { AttachmentError, admitEncodedImages } from '@deepseek-ai/dsh-attachment'
 import type { ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
@@ -19,7 +19,7 @@ import { errorChain } from '@deepseek-ai/dsh-llm'
 import type { ContentBlock, MessageSource } from '@deepseek-ai/dsh-llm'
 import { isAppendSurfaceEvent, isJsonValue } from '@deepseek-ai/dsh-session'
 import type { JsonValue, Session, SessionEvent, SessionEventMap, SessionHeader, SessionId, UserMessage } from '@deepseek-ai/dsh-session'
-import type { SessionPersistence } from '@deepseek-ai/dsh-session-persistence'
+import { SessionPersistenceDeletePendingError, type SessionPersistence } from '@deepseek-ai/dsh-session-persistence'
 import { SessionQueryError, type SessionSearchCursor } from '@deepseek-ai/dsh-session-query'
 import { SubagentError } from '@deepseek-ai/dsh-subagent'
 import type { SubagentListEntry as CatalogSubagentListEntry } from '@deepseek-ai/dsh-subagent'
@@ -983,6 +983,16 @@ class AgentPresetConflict extends Error {
 }
 
 /** Requested identity already belongs to a session with another project cwd. */
+/** Identity whose Agent lifecycle a deletion is currently holding. */
+class SessionDeletionInFlight extends Error {
+  /**
+   * @param sessionId - identity refused until the deletion releases it.
+   */
+  constructor(readonly sessionId: SessionId) {
+    super(`session "${sessionId}" is being deleted`)
+  }
+}
+
 class SessionCwdConflict extends Error {
   constructor(
     readonly sessionId: SessionId,
@@ -1066,6 +1076,86 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
   const presetSwitches = new Map<SessionId, Promise<unknown>>()
   /** Client-chosen identity creation/resume, deduplicated across concurrent retries. */
   const sessionCreations = new Map<SessionId, Promise<Agent>>()
+  /**
+   * The `AgentHandle` for every lifecycle THIS proxy started. `ctx.agents.get`
+   * hands back a bare Agent and the registry has no dispose-by-id, so a session
+   * this proxy did not create cannot be torn down here — that is a refusal, not
+   * a reason to reach into someone else's Agent scope. Keyed by the exact
+   * handle so a stale entry can never dispose a newer lifecycle.
+   */
+  const retainedHandles = new Map<SessionId, AgentHandle>()
+  /** Ids whose deletion holds the lifecycle; activation is refused while set. */
+  const deletionFences = new Set<SessionId>()
+  /** Activation in flight per id, so a deletion can await what began before its fence. */
+  const activations = new Map<SessionId, Promise<void>>()
+
+  /**
+   * Run one AgentHandle-producing activation under a session id and retain its
+   * handle. The fence check and the pending registration share this function's
+   * synchronous prologue, which is what makes deletion safe: a deletion either
+   * observes the activation and awaits it, or the activation is refused
+   * outright. Nothing can publish in between and rebind the persistence owner.
+   * @param sessionId - identity being activated.
+   * @param start - the registry create/resume producing the owned handle.
+   * @returns the handle, also retained for this proxy's own teardown.
+   */
+  function activate(sessionId: SessionId, start: () => Promise<AgentHandle>): Promise<AgentHandle> {
+    if (deletionFences.has(sessionId)) {
+      return Promise.reject(new SessionDeletionInFlight(sessionId))
+    }
+    const activation = (async () => {
+      const handle = await start()
+      retainedHandles.set(sessionId, handle)
+      return handle
+    })()
+    trackActivation(sessionId, activation)
+    return activation
+  }
+
+  /**
+   * Publish that an activation for this id is in flight, so a deletion raised
+   * afterwards awaits it instead of stepping over it. MUST be called before the
+   * path's first `await`: a resume that begins ahead of the fence but registers
+   * behind it would be neither captured nor refused, and its late publication
+   * would rebind the persistence owner onto an id that was already deleted.
+   * Only the matching entry is removed on settle, so a newer activation is
+   * never dropped by an older one finishing.
+   * @param sessionId - identity being activated.
+   * @param work - the activation promise; its rejection is contained here.
+   */
+  function trackActivation(sessionId: SessionId, work: Promise<unknown>): void {
+    const settled = work.then(() => undefined, () => undefined)
+    activations.set(sessionId, settled)
+    void settled.then(() => {
+      if (activations.get(sessionId) === settled) activations.delete(sessionId)
+    })
+  }
+
+  /**
+   * The refusal both activation paths answer with while a deletion holds one
+   * session's lifecycle. `ensureSession` throws it and the RPC layer maps it;
+   * the resolver returns it directly from its guard. Same code, same copy, so
+   * a caller cannot tell which entry point it raced.
+   * @param sessionId - identity a deletion currently owns.
+   * @returns the caller-facing `agent-busy` refusal.
+   */
+  const deletionBusyError = (sessionId: SessionId) => ({
+    code: 'agent-busy' as const,
+    message: `session "${sessionId}" is being deleted`,
+    details: { reason: 'a deletion holds this session lifecycle' },
+  })
+
+  /** The stable refusal for a session this proxy cannot durably delete yet. */
+  const deleteUnavailable = (sessionId: SessionId): string =>
+    `session "${sessionId}" cannot be deleted while it is open or persistence work is in flight; retry once it settles, or restart the harness if it stays open`
+
+  // Retention follows the exact disposed lifecycle, never store residency: the
+  // list path hydrates served sessions into ctx.sessions, and this proxy owns
+  // no handle for those rows.
+  ctx.on('agent/disposed', ({ agent }: { agent: Agent }) => {
+    if (retainedHandles.get(agent.id) === undefined) return
+    if (retainedHandles.get(agent.id)?.agent === agent) retainedHandles.delete(agent.id)
+  })
   /** Serializes path ownership and explicit title checks with Workspace mutations. */
   let workspaceCreationChain = Promise.resolve()
   const pendingQuestions = new Map<RpcId, PendingQuestion>()
@@ -1209,6 +1299,11 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
     agentOptions,
     setup: async ({ meta, events }) =>
       (await composeAgent(resolveSessionPreset({ header: meta, events }))).setup,
+    // A cold resume is the one path that can rebind a persistence owner behind
+    // a deletion's back, so it answers the same fence and hands its handle to
+    // the same retention as `ensureSession`.
+    guard: sessionId => deletionFences.has(sessionId) ? deletionBusyError(sessionId) : undefined,
+    acquire: (sessionId, resume) => activate(sessionId, resume),
   })
 
   /** Send one transient frame to every connected mux consumer. */
@@ -1562,6 +1657,11 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
     checkPersistedIdentity: boolean,
     presetId?: string,
   ): Promise<Agent> {
+    // At the entry, not just inside `activate`: this function can also hand
+    // back an already-live agent without activating anything, and a caller
+    // must not be given a lifecycle a deletion is about to tear down. One
+    // guard here covers both exits.
+    if (deletionFences.has(sessionId)) throw new SessionDeletionInFlight(sessionId)
     let creation = sessionCreations.get(sessionId)
     if (creation === undefined) {
       creation = (async () => {
@@ -1595,11 +1695,12 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
           // session's history was produced under that composition, and
           // rebuilding it differently would replay tool calls the model can no
           // longer make.
-          return (await ctx.agents.resume({
+          const resumeSetup = (await composeAgent(storedPreset)).setup
+          return (await activate(sessionId, () => ctx.agents.resume({
             resumeSessionId: sessionId,
             agentOptions: agentOptions(),
-            setup: (await composeAgent(storedPreset)).setup,
-          })).agent
+            setup: resumeSetup,
+          }))).agent
         }
 
         try {
@@ -1608,7 +1709,7 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
           throw new Error(`failed to ensure project directory "${cwd}": ${String(error)}`, { cause: error })
         }
         const composition = await composeAgent(presetId)
-        return (await ctx.agents.create({
+        return (await activate(sessionId, () => ctx.agents.create({
           sessionId,
           agentOptions: agentOptions(),
           meta: {
@@ -1616,7 +1717,7 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
             ...composition.agentPreset === undefined ? {} : { agentPreset: composition.agentPreset },
           },
           setup: composition.setup,
-        })).agent
+        }))).agent
       })().catch((error: unknown) => {
         // Another Host entry path may have published the same identity while
         // this operation crossed an asynchronous persistence/filesystem step.
@@ -1634,6 +1735,10 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
         sessionCreations.delete(sessionId)
       })
       sessionCreations.set(sessionId, creation)
+      // At entry, not at `activate`: this path awaits persistence.list,
+      // inspect and composeAgent before it activates anything, and a deletion
+      // raised inside that window must still find this resume and wait for it.
+      trackActivation(sessionId, creation)
     }
     const agent = await creation
     if (hasSubagentOwner(agent.session, agent)) throw new SubagentSessionOwnership(sessionId)
@@ -2121,6 +2226,11 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
           if (error instanceof SubagentSessionOwnership) {
             return err(request, subagentOwnershipError(error.sessionId))
           }
+          // Same refusal the resolver's guard returns, so a create racing a
+          // deletion never degrades into `internal:`.
+          if (error instanceof SessionDeletionInFlight) {
+            return err(request, deletionBusyError(error.sessionId))
+          }
           return err(request, {
             code: 'internal',
             message: `failed to create session "${sessionId}": ${String(error)}`,
@@ -2320,7 +2430,7 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
         // plane, composing nothing would leave the child with no tools at all.
         const forkComposition = await composeAgent(resolveSessionPreset(source))
         try {
-          await ctx.agents.create({
+          await activate(childId, () => ctx.agents.create({
             sessionId: childId,
             seed: events.slice(0, cut),
             meta: {
@@ -2333,7 +2443,7 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
             },
             agentOptions: agentOptions(),
             setup: forkComposition.setup,
-          })
+          }))
         } catch (error: unknown) {
           return err(request, {
             code: 'internal',
@@ -2366,49 +2476,95 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
           details: {},
         })
         if (isAborted(signal)) return cancelled()
-        // Store residency is not busyness: the list path hydrates every served
-        // session into ctx.sessions, so `get` is true for idle rows too and
-        // guarding on it makes deletion unreachable. Refuse only in-flight work,
-        // the same predicate the summary and status frames use.
-        if (ctx.agents.get(sessionId)?.status === 'running') {
-          return err(request, {
-            code: 'session-delete-unavailable',
-            message: `session "${sessionId}" is running; stop it before deletion`,
-            details: { sessionId },
-          })
-        }
-        // Optional accessor, like every other persistence read here: this
-        // service does not inject the seam, and surfaces without it must not
-        // fail to boot for a capability only this method needs.
-        const persistence = ctx.get('sessionPersistence')
-        if (persistence === undefined || !persistence.supportsDeletion) {
-          return err(request, {
-            code: 'session-delete-unsupported',
-            message: 'this persistence backend does not support session deletion',
-            details: { sessionId },
-          })
-        }
+        // The fence goes up FIRST and comes down in `finally`. Everything after
+        // it either began before the fence - and is awaited here - or is refused
+        // by `activate` and the resolver guard. That is what keeps a resume from
+        // rebinding the persistence owner between the disposal below and the
+        // durable removal.
+        deletionFences.add(sessionId)
         try {
-          const exists = (await persistence.list(signal))
-            .some(header => header.id === sessionId)
-          if (isAborted(signal)) return cancelled()
-          if (!exists) {
+          // Only when one is actually in flight: an unconditional await would
+          // push the first persistence read past a caller that aborts
+          // synchronously, and cancellation must still be seen on that read.
+          const activation = activations.get(sessionId)
+          if (activation !== undefined) await activation
+          // Store residency is not busyness: the list path hydrates every served
+          // session into ctx.sessions, so `get` is true for idle rows too and
+          // guarding on it makes deletion unreachable. Refuse only in-flight work,
+          // the same predicate the summary and status frames use.
+          if (ctx.agents.get(sessionId)?.status === 'running') {
             return err(request, {
-              code: 'session-not-found',
-              message: `session "${sessionId}" not found in persistence`,
+              code: 'session-delete-unavailable',
+              message: `session "${sessionId}" is running; stop it before deletion`,
               details: { sessionId },
             })
           }
-          await persistence.delete(sessionId, signal)
-          if (isAborted(signal)) return cancelled()
-          return ok(request, { deleted: true })
-        } catch (error: unknown) {
-          if (isAborted(signal)) return cancelled()
-          return err(request, {
-            code: 'internal',
-            message: `failed to delete session "${sessionId}": ${String(error)}`,
-            details: {},
-          })
+          // Optional accessor, like every other persistence read here: this
+          // service does not inject the seam, and surfaces without it must not
+          // fail to boot for a capability only this method needs.
+          const persistence = ctx.get('sessionPersistence')
+          if (persistence === undefined || !persistence.supportsDeletion) {
+            return err(request, {
+              code: 'session-delete-unsupported',
+              message: 'this persistence backend does not support session deletion',
+              details: { sessionId },
+            })
+          }
+          try {
+            const exists = (await persistence.list(signal))
+              .some(header => header.id === sessionId)
+            if (isAborted(signal)) return cancelled()
+            if (!exists) {
+              return err(request, {
+                code: 'session-not-found',
+                message: `session "${sessionId}" not found in persistence`,
+                details: { sessionId },
+              })
+            }
+            // Every expected refusal is now behind us, so disposal is the last
+            // reversible step. An attached idle session holds the persistence
+            // owner; releasing it means tearing down exactly the lifecycle this
+            // proxy started, and nothing else. A live agent this proxy did not
+            // create keeps the old refusal: disposing an Agent scope owned by
+            // someone else is not ours to do.
+            const live = ctx.agents.get(sessionId)
+            if (live !== undefined) {
+              const handle = retainedHandles.get(sessionId)
+              if (handle === undefined || handle.agent !== live) {
+                return err(request, {
+                  code: 'session-delete-unavailable',
+                  message: deleteUnavailable(sessionId),
+                  details: { sessionId },
+                })
+              }
+              if (isAborted(signal)) return cancelled()
+              await handle.dispose()
+              retainedHandles.delete(sessionId)
+            }
+            // The coordinator waits out the retirement that disposal just
+            // armed; this call is what proves the durable artifact is gone.
+            await persistence.delete(sessionId, signal)
+            if (isAborted(signal)) return cancelled()
+            return ok(request, { deleted: true })
+          } catch (error: unknown) {
+            if (isAborted(signal)) return cancelled()
+            if (error instanceof SessionPersistenceDeletePendingError) {
+              return err(request, {
+                code: 'session-delete-unavailable',
+                message: deleteUnavailable(sessionId),
+                details: { sessionId },
+              })
+            }
+            // A backend I/O failure after disposal is reported honestly: the
+            // durable artifact survives and reappears on the next refresh.
+            return err(request, {
+              code: 'internal',
+              message: `failed to delete session "${sessionId}": ${String(error)}`,
+              details: {},
+            })
+          }
+        } finally {
+          deletionFences.delete(sessionId)
         }
       },
 

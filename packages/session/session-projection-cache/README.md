@@ -36,6 +36,10 @@ The read ladder, zero full-log load on the happy path: cached rows → `sessionP
 
 `write(session)` is the synchronous-cut checkpoint both mandatory points use; carriers may call it directly (not fail-soft — the fail-soft wrappers own containment).
 
+## Cleanup (`cleanup(options)`)
+
+The explicit out-of-band sweep compares a snapshot of cache ids with the authoritative valid-session set from `sessionPersistence.list(signal)`. The required `dryRun` option prevents mutation by omission: `true` returns sorted `stale` ids with an empty `deleted` list, while `false` durably deletes only those cache rows and reports successful deletions. Listing or cancellation failures occur before the first delete. Cleanup never calls session-persistence deletion and never touches session logs or directories; a concurrently recreated id can lose only its derived cache row, which the normal cold-read path rebuilds from the log.
+
 ## Composition
 
 ```yaml
@@ -58,6 +62,6 @@ None; the cache never assembles or sends provider requests.
 
 ## Known Limitations and Deferred Work
 
-- **No eviction or retention surface** — records accumulate per session; pruning stored checkpoints is out-of-band maintenance, same stance as session persistence itself.
+- **No automatic eviction or retention policy** — cleanup is an explicit out-of-band call and never removes rows by age.
 - **Interval throttle is per-session coarse** — the timer arms at the first dirty event after a clean write; a steady sub-threshold trickle writes once per interval, not a sliding window.
 - **`coldSnapshot` reads are not deduplicated** — two concurrent cold reads of one session each run the ladder; last write-back wins (rows are equivalent), acceptable for listing-scale call rates.

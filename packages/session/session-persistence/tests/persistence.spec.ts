@@ -4,7 +4,7 @@ import SessionStore, { Session, SessionId, isJsonValue } from '@deepseek-ai/dsh-
 import type { SessionEvent, SessionHeader } from '@deepseek-ai/dsh-session'
 import {
   DEFAULT_PREPARED_SESSION_CACHE_SIZE, DEFAULT_WRITE_BATCH_MAX_DELAY_MS, MAX_WRITE_BATCH_DELAY_MS,
-  SessionPersistence, SessionPersistenceRevision, PersistenceCoordinator,
+  SessionPersistence, SessionPersistenceDeletePendingError, SessionPersistenceRevision, PersistenceCoordinator,
   type PersistenceBackend, type SessionPersistenceSnapshot, type StoredPrefix, type StoredSuffix,
 } from '../src/index.ts'
 import { runPersistenceContract, meta, oneTurnLog } from './contract.ts'
@@ -1957,6 +1957,193 @@ describe('SessionPersistence service registration', () => {
       })
     } finally {
       await fiber.dispose()
+    }
+  })
+})
+
+describe('coordinator delete against a retiring lifecycle', () => {
+  /**
+   * A coordinator whose very first durable append is gated, over one live
+   * session seeded with real events. Disposing the fiber retires that session,
+   * and the retirement cannot finish until the gate opens - which is exactly
+   * the window a delete-after-dispose has to survive.
+   */
+  async function gatedRetirement(): Promise<{
+    ctx: Context
+    backend: ControlledBackend
+    coordinator: PersistenceCoordinator<never>
+    id: SessionId
+    open: () => void
+    retire: () => Promise<void>
+  }> {
+    const ctx = new Context()
+    await ctx.plugin(SessionStore)
+    const backend = new ControlledBackend()
+    const gate = Promise.withResolvers<void>()
+    backend.beforeAppend = () => gate.promise
+    let coordinator!: PersistenceCoordinator<never>
+    await ctx.plugin(Object.assign((inner: Context) => {
+      coordinator = new PersistenceCoordinator(inner, backend)
+    }, { inject: ['sessions'] }))
+    const id = SessionId('retiring-delete')
+    const fiber = await ctx.plugin(Object.assign((inner: Context) => {
+      inner.sessions.create(id, { seed: oneTurnLog(), meta: { cwd: '/work' } })
+    }, { inject: ['sessions'] }))
+    return {
+      ctx,
+      backend,
+      coordinator,
+      id,
+      open: () => { gate.resolve() },
+      retire: () => fiber.dispose(),
+    }
+  }
+
+  it('holds backend removal until the gated retirement settles, then deletes', async () => {
+    const { ctx, coordinator, id, open, retire } = await gatedRetirement()
+    const internals = coordinator as unknown as CoordinatorInternals
+    const remove = vi.fn<() => Promise<void>>().mockResolvedValue(undefined)
+
+    try {
+      void retire()
+      await vi.waitFor(() => { expect(internals.retirements.has(id)).toBe(true) })
+
+      const deletion = coordinator.delete(id, remove)
+      // Several macrotask turns: if delete refused or raced ahead, the removal
+      // would already have run against a session that still owns the prefix.
+      for (let turn = 0; turn < 5; turn++) await new Promise(resolve => setTimeout(resolve, 0))
+      expect(remove).not.toHaveBeenCalled()
+      expect(internals.retirements.has(id)).toBe(true)
+
+      open()
+      await expect(deletion).resolves.toBeUndefined()
+      expect(remove).toHaveBeenCalledTimes(1)
+      expect(internals.retirements.has(id)).toBe(false)
+      expect(internals.states.has(id)).toBe(false)
+    } finally {
+      open()
+      await ctx.fiber.dispose()
+    }
+  })
+
+  it('removes nothing when the wait is cancelled', async () => {
+    const { ctx, coordinator, id, open, retire } = await gatedRetirement()
+    const internals = coordinator as unknown as CoordinatorInternals
+    const remove = vi.fn<() => Promise<void>>().mockResolvedValue(undefined)
+    const controller = new AbortController()
+
+    try {
+      void retire()
+      await vi.waitFor(() => { expect(internals.retirements.has(id)).toBe(true) })
+
+      const deletion = coordinator.delete(id, remove, controller.signal)
+      controller.abort()
+
+      await expect(deletion).rejects.toThrow()
+      expect(remove).not.toHaveBeenCalled()
+    } finally {
+      open()
+      await ctx.fiber.dispose()
+    }
+  })
+
+  it('still refuses while a live session owns the stored prefix', async () => {
+    const ctx = new Context()
+    await ctx.plugin(SessionStore)
+    const backend = new ControlledBackend()
+    let coordinator!: PersistenceCoordinator<never>
+    await ctx.plugin(Object.assign((inner: Context) => {
+      coordinator = new PersistenceCoordinator(inner, backend)
+    }, { inject: ['sessions'] }))
+    const id = SessionId('live-owner-delete')
+    await ctx.plugin(Object.assign((inner: Context) => {
+      inner.sessions.create(id, { seed: oneTurnLog(), meta: { cwd: '/work' } })
+    }, { inject: ['sessions'] }))
+    const remove = vi.fn<() => Promise<void>>().mockResolvedValue(undefined)
+
+    try {
+      await expect(coordinator.delete(id, remove))
+        .rejects.toBeInstanceOf(SessionPersistenceDeletePendingError)
+      expect(remove).not.toHaveBeenCalled()
+    } finally {
+      await ctx.fiber.dispose()
+    }
+  })
+
+  it('still refuses while a serialized operation is pending', async () => {
+    const ctx = new Context()
+    await ctx.plugin(SessionStore)
+    const backend = new ControlledBackend()
+    let coordinator!: PersistenceCoordinator<never>
+    await ctx.plugin(Object.assign((inner: Context) => {
+      coordinator = new PersistenceCoordinator(inner, backend)
+    }, { inject: ['sessions'] }))
+    const id = SessionId('pending-delete')
+    await coordinator.create(meta(id))
+    const gate = Promise.withResolvers<void>()
+    backend.beforeAppend = () => gate.promise
+    const remove = vi.fn<() => Promise<void>>().mockResolvedValue(undefined)
+    // A gated append holds the per-id chain, so `pending` is non-zero with no
+    // retirement in sight: the wait loop exits at once and the refusal must
+    // still be recomputed after it.
+    const append = coordinator.append(id, [{ type: 'turn/start', seq: 0, time: 1, data: { turn: 1 } }])
+
+    try {
+      await expect(coordinator.delete(id, remove))
+        .rejects.toBeInstanceOf(SessionPersistenceDeletePendingError)
+      expect(remove).not.toHaveBeenCalled()
+    } finally {
+      gate.resolve()
+      await append.catch(() => undefined)
+      await ctx.fiber.dispose()
+    }
+  })
+
+  it('still refuses while a preparation holds the identity', async () => {
+    const ctx = new Context()
+    await ctx.plugin(SessionStore)
+    const backend = new ControlledBackend()
+    let coordinator!: PersistenceCoordinator<never>
+    await ctx.plugin(Object.assign((inner: Context) => {
+      coordinator = new PersistenceCoordinator(inner, backend)
+    }, { inject: ['sessions'] }))
+    const id = SessionId('preparation-delete')
+    await coordinator.create(meta(id))
+    await coordinator.append(id, oneTurnLog())
+    const remove = vi.fn<() => Promise<void>>().mockResolvedValue(undefined)
+    const preparation = await coordinator.prepare(id)
+
+    try {
+      await expect(coordinator.delete(id, remove))
+        .rejects.toBeInstanceOf(SessionPersistenceDeletePendingError)
+      expect(remove).not.toHaveBeenCalled()
+    } finally {
+      preparation[Symbol.dispose]()
+      await ctx.fiber.dispose()
+    }
+  })
+
+  it('still refuses a concurrent deletion of the same id', async () => {
+    const ctx = new Context()
+    await ctx.plugin(SessionStore)
+    const backend = new ControlledBackend()
+    let coordinator!: PersistenceCoordinator<never>
+    await ctx.plugin(Object.assign((inner: Context) => {
+      coordinator = new PersistenceCoordinator(inner, backend)
+    }, { inject: ['sessions'] }))
+    const id = SessionId('concurrent-delete')
+    await coordinator.create(meta(id))
+    const held = Promise.withResolvers<void>()
+    const first = coordinator.delete(id, () => held.promise)
+
+    try {
+      await expect(coordinator.delete(id, () => Promise.resolve()))
+        .rejects.toBeInstanceOf(SessionPersistenceDeletePendingError)
+      held.resolve()
+      await expect(first).resolves.toBeUndefined()
+    } finally {
+      held.resolve()
+      await ctx.fiber.dispose()
     }
   })
 })

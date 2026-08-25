@@ -1,9 +1,10 @@
 /**
  * SessionProjectionCache behavior: mandatory-point writes (turn/end, detach),
  * count/interval throttling between them, fail-soft durability (a failed
- * write logs and stays stale, never throws into the event path), and the
+ * write logs and stays stale, never throws into the event path), the
  * cold-read ladder (cached row + readFrom tail + registry restore +
- * write-back; version bump and shrunk-log rows degrade to a full re-read).
+ * write-back; version bump and shrunk-log rows degrade to a full re-read),
+ * and cache-row cleanup against persistence `list`.
  */
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -51,7 +52,7 @@ const marksUnit = (stateVersion = 1) => ({
   stateVersion,
 }) satisfies ProjectionDefinition<'cache-test/marks', MarksState>
 
-/** A persistence double serving readFrom over a fixed per-id stored log (headers stamp createdAt 0). */
+/** A persistence double serving readFrom/list over a fixed per-id stored log (headers stamp createdAt 0). */
 function fakePersistence(logs: Map<string, SessionEvent[]>) {
   const readFrom = vi.fn(async (id: SessionId, fromSeq: number) => {
     const events = logs.get(String(id))
@@ -61,7 +62,14 @@ function fakePersistence(logs: Map<string, SessionEvent[]>) {
       events: events.filter(event => event.seq >= fromSeq),
     }
   })
-  return { readFrom }
+  const list = vi.fn(async (signal?: AbortSignal) => {
+    signal?.throwIfAborted()
+    return [...logs.keys()].map(id => ({ version: 0, id: SessionId(id), createdAt: 0 }))
+  })
+  const persistDelete = vi.fn(async () => {
+    throw new Error('session persistence delete must not be called from projection-cache cleanup')
+  })
+  return { readFrom, list, delete: persistDelete }
 }
 
 /** Header shape for cachedSnapshot calls (fake logs stamp createdAt 0, no cwd). */
@@ -114,6 +122,23 @@ function storedRecord(pool: MemoryMediaPool, id: Session['id']) {
 /** The stored medium rows for one session id (undefined = never written). */
 function storedRows(pool: MemoryMediaPool, id: Session['id']) {
   return storedRecord(pool, id)?.rows
+}
+
+/** Pre-seed the medium with one stored checkpoint record (before the domain opens). */
+function seedRow(
+  pool: MemoryMediaPool,
+  id: string,
+  row: { ver: number; seq: number; val: unknown },
+  identity: { createdAt: number; cwd?: string } = { createdAt: 0 },
+): void {
+  pool.versions.set('session_projcache', 3)
+  const medium = pool.media.get('session_projcache')
+  const sessions = new Map(medium?.tables.get('sessions'))
+  sessions.set(id, { identity, rows: { 'cache-test/marks': row } })
+  pool.media.set('session_projcache', {
+    tables: new Map([['sessions', sessions]]),
+    global: medium?.global ?? null,
+  })
 }
 
 /** Wait until queued fail-soft writes (event-listener fire-and-forget) drain. */
@@ -234,20 +259,6 @@ describe('SessionProjectionCache cold read', () => {
     }
     events.push({ type: 'turn/end', seq: events.length, time: events.length, data: { turn: 1, reason: { kind: 'completed' } } })
     return events
-  }
-
-  /** Pre-seed the medium with one stored checkpoint record (before the domain opens). */
-  function seedRow(
-    pool: MemoryMediaPool,
-    id: string,
-    row: { ver: number; seq: number; val: unknown },
-    identity: { createdAt: number; cwd?: string } = { createdAt: 0 },
-  ): void {
-    pool.versions.set('session_projcache', 3)
-    pool.media.set('session_projcache', {
-      tables: new Map([['sessions', new Map([[id, { identity, rows: { 'cache-test/marks': row } }]])]]),
-      global: null,
-    })
   }
 
   it('serves a cold session from the cache row plus a bounded tail read, and writes the refresh back', async () => {
@@ -402,5 +413,105 @@ describe('SessionProjectionCache cold read', () => {
     await expect(ctx.sessionProjectionCache.coldSnapshot(SessionId('absent'))).rejects.toThrow('not found')
     await expect(ctx.sessionProjectionCache.coldSnapshot(SessionId('bare')))
       .resolves.toEqual({ asOfSeq: 2, values: {} })
+  })
+})
+
+describe('SessionProjectionCache cleanup', () => {
+  const cached = { ver: 1, seq: 1, val: { marks: ['x'] } }
+
+  it('dry-run reports stale ids in sorted order and leaves every row in place', async () => {
+    const pool = new MemoryMediaPool()
+    seedRow(pool, 'zeta', cached)
+    seedRow(pool, 'live', cached, { createdAt: 999 })
+    seedRow(pool, 'alpha', cached)
+    const logs = new Map<string, SessionEvent[]>([['live', []]])
+    const { cache, persistence } = await harness({ pool, logs })
+    const signal = new AbortController().signal
+    const result = await cache.cleanup({ dryRun: true, signal })
+    expect(result).toEqual({ stale: [SessionId('alpha'), SessionId('zeta')], deleted: [] })
+    expect(persistence.list).toHaveBeenCalledWith(signal)
+    expect(persistence.delete).not.toHaveBeenCalled()
+    expect(storedRecord(pool, SessionId('alpha'))).toBeDefined()
+    expect(storedRecord(pool, SessionId('zeta'))).toBeDefined()
+    expect(storedRecord(pool, SessionId('live'))).toBeDefined()
+  })
+
+  it('apply deletes only stale cache rows and does not mutate persisted logs', async () => {
+    const pool = new MemoryMediaPool()
+    const liveLog: SessionEvent[] = [
+      { type: 'turn/start', seq: 0, time: 0, data: { turn: 1 } },
+    ]
+    seedRow(pool, 'stale', cached)
+    seedRow(pool, 'live', cached)
+    const logs = new Map<string, SessionEvent[]>([['live', liveLog]])
+    const { cache, persistence } = await harness({ pool, logs })
+    expect(storedRecord(pool, SessionId('stale'))).toBeDefined()
+    const result = await cache.cleanup({ dryRun: false })
+    expect(result).toEqual({ stale: [SessionId('stale')], deleted: [SessionId('stale')] })
+    expect(storedRecord(pool, SessionId('stale'))).toBeUndefined()
+    expect(storedRecord(pool, SessionId('live'))).toBeDefined()
+    expect(logs.get('live')).toBe(liveLog)
+    expect(logs.get('live')).toEqual([{ type: 'turn/start', seq: 0, time: 0, data: { turn: 1 } }])
+    expect(persistence.delete).not.toHaveBeenCalled()
+  })
+
+  it('apply reports only keys KvTable.delete actually removed', async () => {
+    const pool = new MemoryMediaPool()
+    seedRow(pool, 'ghost', cached)
+    const { cache, persistence } = await harness({ pool })
+    let releaseList!: () => void
+    const listed = new Promise<void>(resolve => {
+      releaseList = resolve
+    })
+    persistence.list.mockImplementation(async (signal?: AbortSignal) => {
+      signal?.throwIfAborted()
+      await listed
+      return []
+    })
+    const first = cache.cleanup({ dryRun: false })
+    const second = cache.cleanup({ dryRun: false })
+    expect(persistence.list).toHaveBeenCalledTimes(2)
+    releaseList()
+    const [a, b] = await Promise.all([first, second])
+    expect(a.stale).toEqual([SessionId('ghost')])
+    expect(b.stale).toEqual([SessionId('ghost')])
+    expect([a.deleted, b.deleted].filter(ids => ids.length > 0)).toEqual([[SessionId('ghost')]])
+    expect(storedRecord(pool, SessionId('ghost'))).toBeUndefined()
+    expect(persistence.delete).not.toHaveBeenCalled()
+  })
+
+  it('treats a cache row omitted by list as stale (unlistable or malformed log)', async () => {
+    const pool = new MemoryMediaPool()
+    seedRow(pool, 'notheader', cached)
+    seedRow(pool, 'live', cached)
+    const logs = new Map<string, SessionEvent[]>([['live', []]])
+    const { cache, persistence } = await harness({ pool, logs })
+    const dry = await cache.cleanup({ dryRun: true })
+    expect(dry).toEqual({ stale: [SessionId('notheader')], deleted: [] })
+    expect(storedRecord(pool, SessionId('notheader'))).toBeDefined()
+    const applied = await cache.cleanup({ dryRun: false })
+    expect(applied).toEqual({ stale: [SessionId('notheader')], deleted: [SessionId('notheader')] })
+    expect(storedRecord(pool, SessionId('notheader'))).toBeUndefined()
+    expect(storedRecord(pool, SessionId('live'))).toBeDefined()
+    expect(persistence.delete).not.toHaveBeenCalled()
+  })
+
+  it('propagates list and cancellation failures before mutating any cache row', async () => {
+    const pool = new MemoryMediaPool()
+    seedRow(pool, 'keep-a', cached)
+    seedRow(pool, 'keep-b', cached)
+    const { cache, persistence } = await harness({ pool })
+    persistence.list.mockRejectedValueOnce(new Error('list unavailable'))
+    await expect(cache.cleanup({ dryRun: false })).rejects.toThrow('list unavailable')
+    expect(storedRecord(pool, SessionId('keep-a'))).toBeDefined()
+    expect(storedRecord(pool, SessionId('keep-b'))).toBeDefined()
+    expect(persistence.delete).not.toHaveBeenCalled()
+    const reason = new Error('cleanup cancelled')
+    const controller = new AbortController()
+    controller.abort(reason)
+    await expect(cache.cleanup({ dryRun: false, signal: controller.signal })).rejects.toBe(reason)
+    expect(storedRecord(pool, SessionId('keep-a'))).toBeDefined()
+    expect(storedRecord(pool, SessionId('keep-b'))).toBeDefined()
+    expect(persistence.delete).not.toHaveBeenCalled()
   })
 })

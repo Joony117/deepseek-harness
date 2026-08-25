@@ -238,6 +238,30 @@ export class SqliteStore implements PersistenceBackend<number> {
     }
   }
 
+  /**
+   * Remove one session's persisted rows under a single write transaction. The
+   * session id is the `sessions` primary key, so the row itself is the identity
+   * check; an unknown id changes nothing and resolves. Deleting the metadata row
+   * also removes that session's `events` rows through the schema's
+   * `ON DELETE CASCADE`, which the connection's `foreign_keys` pragma enforces.
+   * Deletion never traverses `parent_session`: a descendant keeps its own rows
+   * and its now-dangling `parent_session` value, which carries no foreign key.
+   * @param id - the session whose rows are removed.
+   * @param signal - optional cancellation, checked before the transaction opens.
+   * @returns settlement once the removal is committed.
+   */
+  async remove(id: SessionId, signal?: AbortSignal): Promise<void> {
+    await this.observe(signal)
+    this.db.exec(sql('begin-immediate'))
+    try {
+      validateSchemaForMutation(this.databaseConstructor, this.db, this.databasePath)
+      this.db.prepare(sql('delete-session')).run(id)
+      this.db.exec(sql('commit'))
+    } catch (error: unknown) {
+      this.rollback(error, 'delete')
+    }
+  }
+
   async list(signal?: AbortSignal): Promise<SessionHeader[]> {
     await this.observe(signal)
     const rows = this.sessionRows()

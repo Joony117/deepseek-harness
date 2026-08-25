@@ -369,18 +369,38 @@ describe('workspace browser rows', () => {
     expect(screen.queryByRole('button', { name: /工作区/ })).toBeNull()
   })
 
-  it('blank New Session rows carry no menu, no time label, and no hover-card time', () => {
+  it('blank New Session rows expose only Delete when onDelete is supplied', () => {
     vi.useFakeTimers()
     try {
+      const onDelete = vi.fn()
+      const onRename = vi.fn()
+      const onFork = vi.fn()
+      const onArchive = vi.fn()
       const node: SessionNode = {
         id: sid('s-blank'), title: 'ignored', blank: true, running: false,
         runningSubagentCount: 0, completed: false, updatedAt: 0,
       }
-      render(<SessionNodeItem node={node} currentId={node.id} now={0} onOpen={vi.fn()}
-        onRename={vi.fn()} onFork={vi.fn()} onArchive={vi.fn()} t={t} />)
-      // The placeholder has no content yet: no row verbs, no "now" stamp.
+      const view = render(<SessionNodeItem node={node} currentId={node.id} now={0} onOpen={vi.fn()}
+        onRename={onRename} onFork={onFork} onArchive={onArchive} onDelete={onDelete} t={t} />)
+      // Timestamp stays off; the row menu is Delete-only and uses the
+      // localized New Session label, not the stored title.
+      expect(screen.queryByText('刚刚')).toBeNull()
+      fireEvent.click(screen.getByRole('button', { name: '会话“新会话”的操作' }))
+      expect(screen.getAllByRole('menuitem')).toHaveLength(1)
+      expect(screen.queryByRole('menuitem', { name: '重命名' })).toBeNull()
+      expect(screen.queryByRole('menuitem', { name: '分叉会话' })).toBeNull()
+      expect(screen.queryByRole('menuitem', { name: '归档会话' })).toBeNull()
+      fireEvent.click(screen.getByRole('menuitem', { name: '删除会话' }))
+      expect(onDelete).toHaveBeenCalledWith(node.id, '新会话')
+      expect(onRename).not.toHaveBeenCalled()
+      expect(onFork).not.toHaveBeenCalled()
+      expect(onArchive).not.toHaveBeenCalled()
+
+      view.rerender(<SessionNodeItem node={node} currentId={node.id} now={0} onOpen={vi.fn()}
+        onRename={onRename} onFork={onFork} onArchive={onArchive} t={t} />)
       expect(screen.queryByRole('button', { name: /会话.*的操作/ })).toBeNull()
       expect(screen.queryByText('刚刚')).toBeNull()
+
       // The hover card keeps title + status but drops the timestamp line.
       const wrapper = screen.getByRole('treeitem').parentElement as HTMLElement
       fireEvent.pointerEnter(wrapper)

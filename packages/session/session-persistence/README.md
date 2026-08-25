@@ -80,6 +80,6 @@ Persistence does not mutate live request prefixes. A resumed loop can reuse prov
 
 ## Known Limitations and Deferred Work
 
-- **No deletion or retention API** — pruning stored sessions is out-of-band backend maintenance.
+- **Deletion is capability-gated, not universal** — callers must check `supportsDeletion`; the default backend rejects it, while the JSONL and SQLite backends support it. Coordinator-backed implementations refuse deletion while a session is live or persistence work is in flight.
 - **`list()` is unpaginated and unfiltered** — it returns every stored session's header; fine for local stores, unindexed at scale.
 - **Repair-time synthetic closers are the only crash story** — a backend must synthesize `tool/result`/`step/end`/`turn/end` closers on load; there is no partial-turn resume that continues an interrupted turn instead of closing it.

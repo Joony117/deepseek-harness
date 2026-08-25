@@ -342,7 +342,11 @@ export interface SessionsApi {
   Promise<RpcResponse<{ sessionId: SessionId }>>
 
   /**
-   * Durably deletes one detached persisted session. Attached sessions fail
+   * Durably deletes one detached persisted session, or an attached but idle
+   * session whose Agent lifecycle this Host proxy owns - that lifecycle is
+   * disposed first so the persistence owner is released, with no restart.
+   * Running sessions, subagent-owned sessions, and live sessions this proxy
+   * did not create fail
    * with `session-delete-unavailable`; persistence backends without deletion
    * support fail with `session-delete-unsupported`; unknown ids fail with
    * `session-not-found`. Success resolves only after the backend confirms the

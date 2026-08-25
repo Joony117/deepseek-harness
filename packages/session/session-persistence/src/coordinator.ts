@@ -65,6 +65,20 @@ export class SessionFormatUnsupportedError extends Error {
 }
 
 /**
+ * Coordinator refused deletion because per-id work is still in flight or a
+ * live session owns the stored prefix.
+ */
+export class SessionPersistenceDeletePendingError extends Error {
+  /**
+   * @param message - stable refusal text naming the session id.
+   */
+  constructor(message: string) {
+    super(message)
+    this.name = 'SessionPersistenceDeletePendingError'
+  }
+}
+
+/**
  * Direction-aware refusal text for a stored session whose format version this
  * build does not read. Shared by the coordinator's load-time check and by
  * backends that must refuse BEFORE decoding version-dependent structure (a
@@ -648,14 +662,30 @@ export class PersistenceCoordinator<TornMarker = unknown> {
 
   /**
    * Run backend deletion only when coordinator-owned work cannot recreate the
-   * session. New per-id operations reject until deletion settles. A successful
-   * deletion discards detached cursor state for the removed artifact.
+   * session. A retiring lifecycle is awaited rather than refused, so a caller
+   * that disposed the live session can delete what it just released. New per-id
+   * operations reject until deletion settles. A successful deletion discards
+   * detached cursor state for the removed artifact.
    * @param id - persisted session identity to delete.
    * @param remove - backend removal after its own identity validation.
    * @param signal - optional cancellation for deletion work.
+   * @throws {@link SessionPersistenceDeletePendingError} when per-id work is
+   *   still in flight or a live session owns the prefix.
    */
   async delete(id: SessionId, remove: () => Promise<void>, signal?: AbortSignal): Promise<void> {
     signal?.throwIfAborted()
+    // A disposed session registers its retirement synchronously but releases
+    // `states.owner` only once that retirement's flush and serialization
+    // settle, so refusing on it would make deletion-after-disposal impossible
+    // by construction. Wait it out instead — the precedent prepare/load/inspect
+    // already follow — and re-derive every other refusal afterwards. The loop
+    // also covers a replacement retirement: an id that went live and was
+    // disposed again while we waited is a different lifecycle from the one we
+    // started waiting on.
+    while (this.retirements.has(id)) {
+      await this.waitForRetirement(id, signal)
+      signal?.throwIfAborted()
+    }
     const live = [...this.live.keys()].some(session => session.id === id)
     if (this.deletions.has(id)
       || this.pending.has(id)
@@ -663,7 +693,9 @@ export class PersistenceCoordinator<TornMarker = unknown> {
       || this.preparations.has(id)
       || live
       || this.states.get(id)?.owner !== undefined) {
-      throw new Error(`cannot delete session "${id}" while persistence work is pending`)
+      throw new SessionPersistenceDeletePendingError(
+        `cannot delete session "${id}" while persistence work is pending`,
+      )
     }
     this.deletions.add(id)
     try {

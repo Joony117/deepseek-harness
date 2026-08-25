@@ -60,4 +60,5 @@ Physical packing does not mutate request prefixes. Provider cache reuse depends 
 - **`DatabaseSync` blocks the event loop** — physical row reduction does not make SQLite operations asynchronous.
 - **Busy waits block the event loop** — SQLite waits inside synchronous `DatabaseSync` calls; only a busy journal-mode transition yields between attempts, and the open-relative cutoff prevents another attempt rather than interrupting an active call.
 - **External SQL readers must understand physical tags** — supported consumers read through this provider rather than treating every `events.type` as a logical event type.
-- **No deletion or background historical compaction** — normal appends are insert-only.
+- **Deletion is explicit and non-cascading** — `delete(id)` removes that session's metadata row and, through the schema's `ON DELETE CASCADE`, its event rows, in one write transaction. It does not traverse `parentSession` descendants, so a child session keeps its rows and its now-dangling `parentSession` value. An absent or never-materialized id is a no-op; live ownership or in-flight persistence work is refused.
+- **No background historical compaction** — normal appends are insert-only, and only an explicit deletion removes committed rows.

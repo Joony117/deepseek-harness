@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { act, cleanup, createEvent, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, createEvent, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { bindSnapshotSelector } from '@deepseek-ai/dsh-client-test-runtime'
 import type {
   SessionId, SessionListState, SessionSummary, WorkspaceId, WorkspaceListState, WorkspaceView,
@@ -396,6 +396,194 @@ describe('WorkspaceBrowser', () => {
     fireEvent.click(screen.getByRole('button', { name: '删除会话' }))
     await waitFor(() => { expect(screen.getByRole('alert').textContent).toBe('session storage unavailable') })
     expect(screen.getByRole('dialog', { name: '删除会话' })).toBeTruthy()
+  })
+
+  it('refuses to delete a running session from the single-delete dialog', () => {
+    const deleteSession = vi.fn(async () => {})
+    mount({
+      useSessions: hook(sessionState([summary('gone-s', 1, { displayTitle: 'Gone', running: true })])),
+      useWorkspaces: hook(workspaceState([workspace('alpha', ['gone-s'])])),
+      deleteSession,
+    })
+    fireEvent.click(screen.getByText('alpha'))
+    fireEvent.click(screen.getByRole('button', { name: '会话“Gone”的操作' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: '删除会话' }))
+    const dialog = screen.getByRole('dialog', { name: '删除会话' })
+    expect(dialog.textContent).toContain('“Gone”正在运行，请先停止后再删除。')
+    const confirm = screen.getByRole<HTMLButtonElement>('button', { name: '删除会话' })
+    expect(confirm.disabled).toBe(true)
+    fireEvent.click(confirm)
+    expect(deleteSession).not.toHaveBeenCalled()
+  })
+
+  it('opens the session delete dialog from a blank row and surfaces a host error', async () => {
+    const deleteSession = vi.fn(async () => { throw new Error('session-not-found') })
+    const blank = summary('alpha-blank', 1, { blank: true })
+    mount({
+      useSessions: hook(sessionState([blank], { current: blank.id })),
+      useWorkspaces: hook(workspaceState([workspace('alpha', ['alpha-blank'])])),
+      deleteSession,
+    })
+    fireEvent.click(screen.getByRole('button', { name: '会话“新会话”的操作' }))
+    expect(screen.getAllByRole('menuitem')).toHaveLength(1)
+    expect(screen.queryByRole('menuitem', { name: '重命名' })).toBeNull()
+    fireEvent.click(screen.getByRole('menuitem', { name: '删除会话' }))
+    const dialog = screen.getByRole('dialog', { name: '删除会话' })
+    expect(dialog.textContent).toContain('将永久删除“新会话”的会话记录')
+    fireEvent.click(screen.getByRole('button', { name: '删除会话' }))
+    await waitFor(() => { expect(screen.getByRole('alert').textContent).toBe('session-not-found') })
+    expect(screen.getByRole('dialog', { name: '删除会话' })).toBeTruthy()
+  })
+
+  it('lists exact display titles and opaque ids in the bulk delete picker', () => {
+    const visible = summary('sess-alpha', 5, { displayTitle: 'Research notes' })
+    const running = summary('sess-run', 4, { displayTitle: 'Busy work', running: true })
+    const blank = summary('sess-blank', 3, { blank: true })
+    const archived = summary('sess-arch', 2, { displayTitle: 'Archived notes' })
+    const subagent = {
+      ...summary('sess-sub', 1, { displayTitle: 'Hidden sub', running: true }),
+      origin: 'subagent' as const,
+      parentId: visible.id,
+    }
+    mount({
+      useSessions: hook(sessionState(
+        [visible, running, blank, archived, subagent],
+        { current: blank.id },
+      )),
+      useWorkspaces: hook(workspaceState(
+        [workspace('alpha', ['sess-alpha', 'sess-run', 'sess-blank', 'sess-arch', 'sess-sub'])],
+        [sid('sess-arch')],
+      )),
+    })
+    fireEvent.click(screen.getByRole('button', { name: '批量删除会话' }))
+    const dialog = screen.getByRole('dialog', { name: '选择要删除的会话' })
+    expect(within(dialog).getByText('Research notes')).toBeTruthy()
+    expect(within(dialog).getByText('sess-alpha')).toBeTruthy()
+    expect(within(dialog).getByText('Busy work')).toBeTruthy()
+    expect(within(dialog).getByText('sess-run')).toBeTruthy()
+    expect(within(dialog).queryByText('Archived notes')).toBeNull()
+    expect(within(dialog).queryByText('Hidden sub')).toBeNull()
+    expect(within(dialog).queryByText('sess-blank')).toBeNull()
+    expect(within(dialog).getByRole<HTMLInputElement>('checkbox', { name: /Research notes/ }).disabled).toBe(false)
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: '继续' }).disabled).toBe(true)
+  })
+
+  it('keeps running sessions visible in the bulk picker with disabled checkboxes', () => {
+    mount({
+      useSessions: hook(sessionState([
+        summary('idle-s', 2, { displayTitle: 'Idle' }),
+        summary('run-s', 1, { displayTitle: 'Busy', running: true }),
+      ])),
+      useWorkspaces: hook(workspaceState([workspace('alpha', ['idle-s', 'run-s'])])),
+    })
+    fireEvent.click(screen.getByRole('button', { name: '批量删除会话' }))
+    const dialog = screen.getByRole('dialog', { name: '选择要删除的会话' })
+    const running = within(dialog).getByRole<HTMLInputElement>('checkbox', { name: /Busy/ })
+    expect(running.disabled).toBe(true)
+    expect(running.checked).toBe(false)
+    expect(within(dialog).getByText('进行中')).toBeTruthy()
+    fireEvent.click(running)
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: '继续' }).disabled).toBe(true)
+  })
+
+  it('deletes checked idle sessions sequentially in snapshot order', async () => {
+    let resolveFirst!: () => void
+    let resolveSecond!: () => void
+    const deleteSession = vi.fn((id: SessionId) => new Promise<void>((resolve) => {
+      if (id === sid('first-s')) resolveFirst = resolve
+      else resolveSecond = resolve
+    }))
+    mount({
+      useSessions: hook(sessionState([
+        summary('first-s', 2, { displayTitle: 'First' }),
+        summary('second-s', 1, { displayTitle: 'Second' }),
+      ])),
+      useWorkspaces: hook(workspaceState([workspace('alpha', ['first-s', 'second-s'])])),
+      deleteSession,
+    })
+    fireEvent.click(screen.getByRole('button', { name: '批量删除会话' }))
+    const picker = screen.getByRole('dialog', { name: '选择要删除的会话' })
+    fireEvent.click(within(picker).getByRole('checkbox', { name: /First/ }))
+    fireEvent.click(within(picker).getByRole('checkbox', { name: /Second/ }))
+    fireEvent.click(screen.getByRole('button', { name: '继续' }))
+    const confirmDialog = screen.getByRole('dialog', { name: '删除会话' })
+    expect(confirmDialog.textContent).toContain('将永久删除下列会话记录')
+    expect(within(confirmDialog).getByText('First')).toBeTruthy()
+    expect(within(confirmDialog).getByText('first-s')).toBeTruthy()
+    expect(within(confirmDialog).getByText('Second')).toBeTruthy()
+    expect(within(confirmDialog).getByText('second-s')).toBeTruthy()
+    const confirm = within(confirmDialog).getByRole<HTMLButtonElement>('button', { name: '删除会话' })
+    fireEvent.click(confirm)
+    fireEvent.click(confirm)
+    expect(deleteSession).toHaveBeenCalledOnce()
+    expect(deleteSession).toHaveBeenCalledWith(sid('first-s'))
+    expect(within(confirmDialog).getByRole<HTMLButtonElement>('button', { name: '取消' }).disabled).toBe(true)
+    expect(within(confirmDialog).getByRole('status').textContent).toBe('正在删除会话…')
+    fireEvent.keyDown(document, { key: 'Escape' })
+    expect(screen.getByRole('dialog', { name: '删除会话' })).toBeTruthy()
+    await act(async () => { resolveFirst() })
+    await waitFor(() => { expect(deleteSession).toHaveBeenCalledTimes(2) })
+    expect(deleteSession.mock.calls.map(call => call[0])).toEqual([sid('first-s'), sid('second-s')])
+    await act(async () => { resolveSecond() })
+    await waitFor(() => { expect(screen.queryByRole('dialog', { name: '删除会话' })).toBeNull() })
+  })
+
+  it('reports per-target bulk delete failures without hiding survivors', async () => {
+    const deleteSession = vi.fn(async (id: SessionId) => {
+      if (id === sid('keep-s')) throw new Error('session storage unavailable')
+    })
+    const gone = summary('gone-s', 2, { displayTitle: 'Gone' })
+    const keep = summary('keep-s', 1, { displayTitle: 'Keep' })
+    const b = mount({
+      useSessions: hook(sessionState([gone, keep])),
+      useWorkspaces: hook(workspaceState([workspace('alpha', ['gone-s', 'keep-s'])])),
+      deleteSession,
+    })
+    fireEvent.click(screen.getByRole('button', { name: '批量删除会话' }))
+    const picker = screen.getByRole('dialog', { name: '选择要删除的会话' })
+    fireEvent.click(within(picker).getByRole('checkbox', { name: /Gone/ }))
+    fireEvent.click(within(picker).getByRole('checkbox', { name: /Keep/ }))
+    fireEvent.click(screen.getByRole('button', { name: '继续' }))
+    fireEvent.click(within(screen.getByRole('dialog', { name: '删除会话' })).getByRole('button', { name: '删除会话' }))
+    await waitFor(() => {
+      expect(deleteSession.mock.calls.map(call => call[0])).toEqual([sid('gone-s'), sid('keep-s')])
+    })
+    const dialog = screen.getByRole('dialog', { name: '删除会话' })
+    const alert = within(dialog).getByRole('alert')
+    expect(alert.textContent).toContain('Keep')
+    expect(alert.textContent).toContain('keep-s')
+    expect(alert.textContent).toContain('session storage unavailable')
+    expect(within(dialog).queryByText('Gone')).toBeNull()
+    expect(within(dialog).getByText('Keep')).toBeTruthy()
+    rerender(b, {
+      useSessions: hook(sessionState([keep])),
+      useWorkspaces: hook(workspaceState([workspace('alpha', ['keep-s'])])),
+    })
+    fireEvent.click(screen.getByText('alpha'))
+    const tree = screen.getByRole('tree', { name: '会话' })
+    expect(within(tree).queryByText('Gone')).toBeNull()
+    expect(within(tree).getByText('Keep')).toBeTruthy()
+    expect(within(screen.getByRole('dialog', { name: '删除会话' })).getByRole('alert').textContent)
+      .toContain('session storage unavailable')
+  })
+
+  it('re-reads running state at bulk confirm and does not call deleteSession', () => {
+    const deleteSession = vi.fn(async () => {})
+    const idle = summary('gone-s', 1, { displayTitle: 'Gone' })
+    const b = mount({
+      useSessions: hook(sessionState([idle])),
+      useWorkspaces: hook(workspaceState([workspace('alpha', ['gone-s'])])),
+      deleteSession,
+    })
+    fireEvent.click(screen.getByRole('button', { name: '批量删除会话' }))
+    fireEvent.click(screen.getByRole('checkbox', { name: /Gone/ }))
+    fireEvent.click(screen.getByRole('button', { name: '继续' }))
+    rerender(b, { useSessions: hook(sessionState([{ ...idle, running: true }])) })
+    const confirm = within(screen.getByRole('dialog', { name: '删除会话' }))
+      .getByRole<HTMLButtonElement>('button', { name: '删除会话' })
+    expect(confirm.disabled).toBe(true)
+    fireEvent.click(confirm)
+    expect(deleteSession).not.toHaveBeenCalled()
   })
 
   it('logs and keeps the tree when the archive call rejects', async () => {

@@ -1262,7 +1262,7 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
   {
     key: 'sessionProjectionCache',
     summary: 'The persisted projection cache service.',
-    description: 'The persisted projection cache service. Opens the `session_projcache` domain at init, checkpoints live sessions on a throttled write-behind (count/interval triggers from Config) plus two mandatory points — `turn/end` and session disposal (the live-to-cold moment) — and serves the cold-read ladder: cached row, persistence `readFrom` tail, registry `restore`, durable write-back. Every durable write is fail-soft: failures log a warning and the cache self-heals on the next write or cold read.',
+    description: 'The persisted projection cache service. Opens the `session_projcache` domain at init, checkpoints live sessions on a throttled write-behind (count/interval triggers from Config) plus two mandatory points — `turn/end` and session disposal (the live-to-cold moment) — and serves the cold-read ladder: cached row, persistence `readFrom` tail, registry `restore`, durable write-back. Every durable write is fail-soft: failures log a warning and the cache self-heals on the next write or cold read. `cleanup` deletes only cache rows whose ids are absent from persistence `list`; it never removes a session log.',
     methods: [
       {
         signature: 'cachedSnapshot(meta: SessionHeader): ProjectionSnapshot | undefined',
@@ -1281,6 +1281,12 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         description: 'Cold-read one persisted session\'s projections with zero full-log load: cached rows + a persistence `readFrom` tail from the registry\'s restore floor, refolded by the registry and written back (fail-soft) so the next cold read starts closer. A cache row invalidated by a shrunk log (crash-repair truncation) triggers one full re-read from seq 0 — the ladder\'s slow rung, still no crash. Rejects when the session has no persisted log (`not found` from the persistence seam).',
         parameters: [{ name: 'id', description: 'the persisted session to read.' }, { name: 'signal', description: 'optional cancellation for the persistence reads.' }],
         returns: 'the snapshot cut at the stored log end.',
+      },
+      {
+        signature: 'async cleanup( options: { dryRun: boolean; signal?: AbortSignal }, ): Promise<{ stale: SessionId[]; deleted: SessionId[] }>',
+        description: 'Drop cache rows whose session ids are absent from persistence `list` — the authoritative valid-session set. Snapshots table keys, then awaits `list(signal)` before any mutation, so a listing or cancellation failure leaves every row untouched. A row is stale only when that list omits its id; `ctx.sessions` residency, log identity, and session directories are not consulted. `dryRun: true` reports stale ids and performs zero deletes. Apply mode calls only KvTable.delete for those ids; `deleted` is the subset that actually existed. Never calls persistence `delete`.',
+        parameters: [{ name: 'options', description: 'required `dryRun`; optional `signal` forwarded to `list`.' }],
+        returns: 'stale ids in sorted order, and the ids actually removed (empty on dry-run).',
       },
     ],
   },

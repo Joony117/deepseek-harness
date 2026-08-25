@@ -1,19 +1,19 @@
 /**
  * The workspace/session browsing region filling the sidebar shell's
- * `sidebar.workspaces` hole: section header (title + view options + add
- * workspace), search, the grouped tree or flat list, and the workspace
- * dialogs. Wide state renders the full browser; rail state renders the two
- * region icons (search / add workspace) as 36px controls on the shell's shared
- * rail entry path, each requesting expansion through the owner share. Adding
- * is the header button's one action, so it raises the directory flow with no
- * menu in between; the flow and its error dialog live in WorkspacePicker
- * (same package — direct composition, no slot between them).
+ * `sidebar.workspaces` hole: section header (title + view options + bulk
+ * delete + add workspace), search, the grouped tree or flat list, and the
+ * workspace dialogs. Wide state renders the full browser; rail state renders
+ * the two region icons (search / add workspace) as 36px controls on the
+ * shell's shared rail entry path, each requesting expansion through the owner
+ * share. Adding is the header button's one action, so it raises the directory
+ * flow with no menu in between; the flow and its error dialog live in
+ * WorkspacePicker (same package — direct composition, no slot between them).
  */
 import { useEffect, useMemo, useRef, useState } from 'react'
 import clsx from 'clsx'
 import {
   Button, IconCloseFill14, IconPersonalizationOutline16,
-  IconProjectAddOutline16, IconSearchOutline16, Menu, Modal, Tooltip,
+  IconProjectAddOutline16, IconSearchOutline16, IconTrashOutline16, Menu, Modal, Tooltip,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type {
   SessionId, SessionListState, SessionSearchResultItem, WorkspaceId, WorkspaceView,
@@ -93,6 +93,47 @@ function reconciledSessionOrder(sessionIds: readonly SessionId[], stored: readon
     ordered.push(id)
   }
   return ordered
+}
+
+/** Display title plus opaque session id, snapshotted for irreversible confirm. */
+interface SessionDeleteIdentity {
+  sessionId: SessionId
+  title: string
+}
+
+/** One bulk-picker row: identity plus the live running bit that disables the checkbox. */
+interface BulkDeleteCandidate extends SessionDeleteIdentity {
+  running: boolean
+}
+
+/**
+ * Ordinary, non-archived, non-blank sessions in host list order.
+ * Origin-subagent rows stay hidden from grouping surfaces and from bulk delete.
+ * @param list - current session list snapshot.
+ * @param archivedSessionIds - registry-global archive set.
+ * @returns picker rows with exact display title and opaque session id.
+ */
+function bulkDeleteCandidates(
+  list: SessionListState,
+  archivedSessionIds: readonly SessionId[],
+): BulkDeleteCandidate[] {
+  const archived = new Set(archivedSessionIds)
+  const rows: BulkDeleteCandidate[] = []
+  for (const id of list.ids) {
+    const session = list.byId[id]
+    if (session === undefined || session.origin === 'subagent' || session.blank || archived.has(id)) continue
+    rows.push({ sessionId: session.id, title: session.displayTitle, running: session.running })
+  }
+  return rows
+}
+
+/**
+ * Thrown `deleteSession` rejection text; wire codes are not remapped.
+ * @param reason - rejection from `deleteSession`.
+ * @returns `Error.message` when present, otherwise `String(reason)`.
+ */
+function deleteFailureMessage(reason: unknown): string {
+  return reason instanceof Error ? reason.message : String(reason)
 }
 
 /** Newest update first with stable Session identity as the tie-break. */
@@ -775,6 +816,9 @@ export function WorkspaceBrowser({
   const workspaces = useWorkspaces(state => state.items)
   const workspacePhase = useWorkspaces(state => state.phase)
   const archivedSessionIds = useWorkspaces(state => state.archivedSessionIds)
+  const sessionList = useSessions(s => s)
+  const sessionListRef = useRef(sessionList)
+  sessionListRef.current = sessionList
   // Live occupancy of this surface's directory-flow hole (the same source the
   // flow reads): a composition without a picking affordance can add nothing.
   const directoryFlowAvailable = useDirectoryFlow(occupied => occupied)
@@ -981,14 +1025,17 @@ export function WorkspaceBrowser({
   const [sessionDeleteTarget, setSessionDeleteTarget] = useState<{ sessionId: SessionNode['id']; title: string } | null>(null)
   const [sessionDeleting, setSessionDeleting] = useState(false)
   const [sessionDeleteError, setSessionDeleteError] = useState<string | null>(null)
+  const sessionDeleteRunning = sessionDeleteTarget !== null
+    && sessionList.byId[sessionDeleteTarget.sessionId]?.running === true
   const closeSessionDelete = () => {
     if (sessionDeleting) return
     setSessionDeleteTarget(null)
     setSessionDeleteError(null)
   }
   const confirmSessionDelete = () => {
-    /* v8 ignore next -- the Modal is absent without a target and its button is disabled while deleting. */
+    /* v8 ignore next -- the Modal is absent without a target and its button is disabled while deleting or running. */
     if (sessionDeleting || sessionDeleteTarget === null) return
+    if (sessionList.byId[sessionDeleteTarget.sessionId]?.running === true) return
     setSessionDeleting(true)
     setSessionDeleteError(null)
     deleteSession(sessionDeleteTarget.sessionId).then(() => {
@@ -996,12 +1043,96 @@ export function WorkspaceBrowser({
       setSessionDeleteTarget(null)
     }).catch((reason: unknown) => {
       setSessionDeleting(false)
-      setSessionDeleteError(reason instanceof Error ? reason.message : String(reason))
+      setSessionDeleteError(deleteFailureMessage(reason))
     })
   }
   const onSessionDelete = (sessionId: SessionNode['id'], title: string) => {
     setSessionDeleteTarget({ sessionId, title })
     setSessionDeleteError(null)
+  }
+
+  const bulkCandidates = useMemo(
+    () => bulkDeleteCandidates(sessionList, archivedSessionIds),
+    [archivedSessionIds, sessionList],
+  )
+  const [bulkPickOpen, setBulkPickOpen] = useState(false)
+  const [bulkChecked, setBulkChecked] = useState<readonly SessionId[]>([])
+  const [bulkConfirmTargets, setBulkConfirmTargets] = useState<readonly SessionDeleteIdentity[] | null>(null)
+  const [bulkDeleting, setBulkDeleting] = useState(false)
+  const [bulkDeleteErrors, setBulkDeleteErrors] = useState<readonly {
+    sessionId: SessionId
+    title: string
+    message: string
+  }[]>([])
+  const bulkIdleChecked = bulkCandidates.filter(candidate =>
+    !candidate.running && bulkChecked.includes(candidate.sessionId))
+  const bulkConfirmBlocked = bulkConfirmTargets !== null
+    && bulkConfirmTargets.length > 0
+    && bulkConfirmTargets.every(target => sessionList.byId[target.sessionId]?.running === true)
+  const closeBulkDelete = () => {
+    if (bulkDeleting) return
+    setBulkPickOpen(false)
+    setBulkChecked([])
+    setBulkConfirmTargets(null)
+    setBulkDeleteErrors([])
+  }
+  const openBulkDelete = () => {
+    setBulkPickOpen(true)
+    setBulkChecked([])
+    setBulkConfirmTargets(null)
+    setBulkDeleteErrors([])
+  }
+  const continueBulkDelete = () => {
+    if (bulkIdleChecked.length === 0) return
+    setBulkConfirmTargets(bulkIdleChecked.map(({ sessionId, title }) => ({ sessionId, title })))
+    setBulkPickOpen(false)
+    setBulkDeleteErrors([])
+  }
+  const toggleBulkChecked = (sessionId: SessionId, running: boolean) => {
+    if (running) return
+    setBulkChecked(ids => ids.includes(sessionId)
+      ? ids.filter(id => id !== sessionId)
+      : [...ids, sessionId])
+  }
+  const confirmBulkDelete = () => {
+    /* v8 ignore next -- the Modal is absent without targets and its button is disabled while deleting or all-running. */
+    if (bulkDeleting || bulkConfirmTargets === null || bulkConfirmTargets.length === 0) return
+    const targets = bulkConfirmTargets
+    setBulkDeleting(true)
+    setBulkDeleteErrors([])
+    void (async () => {
+      const remaining: SessionDeleteIdentity[] = []
+      const errors: { sessionId: SessionId; title: string; message: string }[] = []
+      for (const target of targets) {
+        if (sessionListRef.current.byId[target.sessionId]?.running === true) {
+          remaining.push(target)
+          errors.push({
+            sessionId: target.sessionId,
+            title: target.title,
+            message: t('delete.sessionRunning', { name: target.title }),
+          })
+          continue
+        }
+        try {
+          await deleteSession(target.sessionId)
+        } catch (reason: unknown) {
+          remaining.push(target)
+          errors.push({
+            sessionId: target.sessionId,
+            title: target.title,
+            message: deleteFailureMessage(reason),
+          })
+        }
+      }
+      setBulkDeleting(false)
+      if (remaining.length === 0) {
+        setBulkConfirmTargets(null)
+        setBulkDeleteErrors([])
+        return
+      }
+      setBulkConfirmTargets(remaining)
+      setBulkDeleteErrors(errors)
+    })()
   }
 
   // Delete dialog is separate from the row so a successful removal can
@@ -1113,6 +1244,21 @@ export function WorkspaceBrowser({
               onOrderPick={(mode) => { actions.setOrderBy(mode) }}
               t={t}
             />
+          )}
+          {wide && (
+            <Tooltip label={t('delete.sessions.bulk')} side="bottom" delayMs={500}>
+              <button
+                type="button"
+                className={clsx(css.iconButton, css.wide)}
+                aria-label={t('delete.sessions.bulk')}
+                onClick={() => {
+                  setWsPickerOpen(false)
+                  openBulkDelete()
+                }}
+              >
+                <IconTrashOutline16 />
+              </button>
+            </Tooltip>
           )}
           {/* Adding is the button's one action, so a composition with no
               picking affordance has nothing to offer here: the region hides the
@@ -1308,14 +1454,18 @@ export function WorkspaceBrowser({
         title={t('delete.session')}
         {...sessionDeleteTarget === null
           ? {}
-          : { description: t('delete.sessionDesc', { name: sessionDeleteTarget.title }) }}
+          : {
+            description: sessionDeleteRunning
+              ? t('delete.sessionRunning', { name: sessionDeleteTarget.title })
+              : t('delete.sessionDesc', { name: sessionDeleteTarget.title }),
+          }}
         footer={(
           <>
             <Button variant="outline" disabled={sessionDeleting} onClick={closeSessionDelete}>{t('cancel')}</Button>
             <Button
               variant="outline"
               className={css.deleteAction}
-              disabled={sessionDeleting}
+              disabled={sessionDeleting || sessionDeleteRunning}
               onClick={confirmSessionDelete}
             >
               {t('delete.session')}
@@ -1325,6 +1475,97 @@ export function WorkspaceBrowser({
       >
         {sessionDeleting && <div className={css.deleteStatus} role="status">{t('delete.sessionPending')}</div>}
         {sessionDeleteError !== null && <div className={css.renameError} role="alert">{sessionDeleteError}</div>}
+      </Modal>
+      <Modal
+        open={bulkPickOpen}
+        onClose={closeBulkDelete}
+        closeLabel={t('close')}
+        title={t('delete.sessions.pick')}
+        description={t('delete.sessions.pickDesc')}
+        footer={(
+          <>
+            <Button variant="outline" onClick={closeBulkDelete}>{t('cancel')}</Button>
+            <Button
+              variant="primary"
+              disabled={bulkIdleChecked.length === 0}
+              onClick={continueBulkDelete}
+            >
+              {t('delete.sessions.continue')}
+            </Button>
+          </>
+        )}
+      >
+        {bulkCandidates.length === 0
+          ? <div className={css.empty}>{t('empty.none')}</div>
+          : (
+            <ul className={css.bulkList}>
+              {bulkCandidates.map((candidate) => {
+                const running = candidate.running
+                return (
+                  <li key={candidate.sessionId}>
+                    <label className={css.bulkItem}>
+                      <input
+                        type="checkbox"
+                        checked={!running && bulkChecked.includes(candidate.sessionId)}
+                        disabled={running}
+                        onChange={() => { toggleBulkChecked(candidate.sessionId, running) }}
+                      />
+                      <span className={css.bulkMeta}>
+                        <span>{candidate.title}</span>
+                        <span className={css.bulkId}>{candidate.sessionId}</span>
+                        {running && <span className={css.bulkStatus}>{t('status.running')}</span>}
+                      </span>
+                    </label>
+                  </li>
+                )
+              })}
+            </ul>
+          )}
+      </Modal>
+      <Modal
+        open={bulkConfirmTargets !== null}
+        onClose={closeBulkDelete}
+        closeLabel={t('close')}
+        title={t('delete.session')}
+        {...bulkConfirmTargets === null
+          ? {}
+          : { description: t('delete.sessions.confirmDesc') }}
+        footer={(
+          <>
+            <Button variant="outline" disabled={bulkDeleting} onClick={closeBulkDelete}>{t('cancel')}</Button>
+            <Button
+              variant="outline"
+              className={css.deleteAction}
+              disabled={bulkDeleting || bulkConfirmBlocked}
+              onClick={confirmBulkDelete}
+            >
+              {t('delete.session')}
+            </Button>
+          </>
+        )}
+      >
+        {bulkConfirmTargets !== null && (
+          <ul className={css.bulkList}>
+            {bulkConfirmTargets.map(target => (
+              <li key={target.sessionId} className={css.bulkItem}>
+                <span className={css.bulkMeta}>
+                  <span>{target.title}</span>
+                  <span className={css.bulkId}>{target.sessionId}</span>
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
+        {bulkDeleting && <div className={css.deleteStatus} role="status">{t('delete.sessionPending')}</div>}
+        {bulkDeleteErrors.map(error => (
+          <div key={error.sessionId} className={css.renameError} role="alert">
+            {error.title}
+            {' '}
+            {error.sessionId}
+            {': '}
+            {error.message}
+          </div>
+        ))}
       </Modal>
       <Modal
         open={deleteTarget !== null}

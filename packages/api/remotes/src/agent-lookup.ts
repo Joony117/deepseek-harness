@@ -1,7 +1,7 @@
 /** Host BFF policy for resolving Remote Agent and Session identities. */
 
 import type { Context } from '@deepseek-ai/cordis'
-import type { Agent, AgentOptions, AgentSetup } from '@deepseek-ai/dsh-agent'
+import type { Agent, AgentHandle, AgentOptions, AgentSetup } from '@deepseek-ai/dsh-agent'
 import type { Session, SessionEvent, SessionHeader, SessionId } from '@deepseek-ai/dsh-session'
 import type {} from '@deepseek-ai/dsh-session-persistence'
 import { TypertLookupFailure } from '@deepseek-ai/dsh-typert-protocol'
@@ -36,10 +36,44 @@ export interface ApiRemoteAgentOptions {
   readonly setup?: (
     session: { meta: SessionHeader; events: readonly SessionEvent[] },
   ) => AgentSetup | Promise<AgentSetup>
+  /**
+   * Refuse an identity whose Host-side lifecycle the owner is tearing down.
+   * Consulted before a live Agent is returned and again immediately before a
+   * cold resume publishes, so a Host deleting a session can be sure nothing
+   * resumed the same id behind its back. Omitting it keeps today's behaviour.
+   * @param sessionId - identity being resolved.
+   * @returns the caller-facing refusal, or undefined to proceed.
+   */
+  readonly guard?: (sessionId: SessionId) => ApiRemoteLookupError | undefined
+  /**
+   * Wrap this resolver's cold resume so the owning Host retains the exact
+   * {@link AgentHandle} it produced. The resolver keeps only `handle.agent`;
+   * an owner that must later tear down precisely this lifecycle needs the
+   * handle itself, and there is no dispose-by-id on the registry. Omitting it
+   * keeps today's behaviour.
+   * @param sessionId - identity being resumed.
+   * @param resume - the resolver's own resume, called at most once.
+   * @returns the same handle `resume` produced.
+   */
+  readonly acquire?: (
+    sessionId: SessionId,
+    resume: () => Promise<AgentHandle>,
+  ) => Promise<AgentHandle>
 }
 
 /** Cold identity absent from the durable session store. */
 export class ApiRemoteSessionNotFound extends Error {}
+
+/** Identity the owning Host fenced (a deletion holds its lifecycle). */
+class ApiRemoteGuardRefusal extends Error {
+  /**
+   * Carry the owner's refusal across the resume promise.
+   * @param failure - the caller-facing error the guard returned.
+   */
+  constructor(readonly failure: ApiRemoteLookupError) {
+    super(failure.message)
+  }
+}
 
 /** Session identity whose lifecycle belongs to subagent routing. */
 export class ApiRemoteSubagentSessionOwnership extends Error {
@@ -134,6 +168,8 @@ export function createApiRemoteAgentResolver(
   }
 
   const agentFor = async (sessionId: SessionId): Promise<ApiRemoteAgentResult> => {
+    const guarded = options.guard?.(sessionId)
+    if (guarded !== undefined) return { error: guarded }
     const fenced = fencedLiveAgent(sessionId)
     if (fenced !== undefined) return fenced
     const attached = ctx.sessions.get(sessionId)
@@ -142,8 +178,7 @@ export function createApiRemoteAgentResolver(
     }
     let resume = resumes.get(sessionId)
     if (resume === undefined) {
-      resume = (async () => {
-        try {
+      const publish = async (): Promise<AgentHandle> => {
           const inspected = await inspectApiRemoteSession(ctx, sessionId)
           if (hasApiRemoteSubagentOwner(ctx, { header: inspected.meta }, undefined)) {
             throw new ApiRemoteSubagentSessionOwnership(sessionId)
@@ -159,11 +194,28 @@ export function createApiRemoteAgentResolver(
             && hasApiRemoteSubagentOwner(ctx, publishedSession, publishedAgent)) {
             throw new ApiRemoteSubagentSessionOwnership(sessionId)
           }
-          const handle = await ctx.agents.resume({
+          // Re-checked here, adjacent to publication, for the same reason the
+          // subagent re-checks above are: the owner may have fenced this id
+          // while setup awaited, and publishing now would rebind a lifecycle
+          // it is in the middle of tearing down.
+          const fencedNow = options.guard?.(sessionId)
+          if (fencedNow !== undefined) throw new ApiRemoteGuardRefusal(fencedNow)
+          return await ctx.agents.resume({
             resumeSessionId: sessionId,
             ...options.agentOptions === undefined ? {} : { agentOptions: options.agentOptions() },
             ...setup === undefined ? {} : { setup },
           })
+      }
+      resume = (async () => {
+        try {
+          // `acquire` is invoked synchronously here, BEFORE `publish` reaches
+          // its first await, so an owner that fences this id sees the pending
+          // activation from the moment the cold resume begins rather than only
+          // when it publishes. Registering at publication time would leave a
+          // resume that started ahead of a fence invisible to it.
+          const handle = options.acquire === undefined
+            ? await publish()
+            : await options.acquire(sessionId, publish)
           return handle.agent
         } finally {
           resumes.delete(sessionId)
@@ -180,6 +232,7 @@ export function createApiRemoteAgentResolver(
       if (error instanceof ApiRemoteSubagentSessionOwnership) {
         return { error: apiRemoteSubagentOwnershipError(error.sessionId) }
       }
+      if (error instanceof ApiRemoteGuardRefusal) return { error: error.failure }
       const fenced = fencedLiveAgent(sessionId)
       if (fenced !== undefined) return fenced
       const attached = ctx.sessions.get(sessionId)

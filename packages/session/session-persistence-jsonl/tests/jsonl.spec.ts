@@ -343,6 +343,76 @@ describe('JsonlSessionPersistence: durability and crash semantics', () => {
     }
   })
 
+  it('deletes a materialized session whose log contains only command events', async () => {
+    const m = meta('delete-command-only', '/work')
+    const log = [
+      {
+        type: 'command/run',
+        seq: 0,
+        time: 1,
+        data: { commandId: 'cmd-blank', name: 'help', source: { kind: 'user' } },
+      },
+      {
+        type: 'command/done',
+        seq: 1,
+        time: 2,
+        data: { commandId: 'cmd-blank', kind: 'success' },
+      },
+    ] as unknown as SessionEvent[]
+    await ctx.sessionPersistence.create(m)
+    await ctx.sessionPersistence.append(m.id, log)
+    const dir = sessionDir(root, m.cwd, m.id)
+
+    expect((await ctx.sessionPersistence.load(m.id)).events.map(event => event.type))
+      .toEqual(['command/run', 'command/done'])
+    expect((await ctx.sessionPersistence.list()).map(header => header.id)).toContain(m.id)
+
+    await ctx.sessionPersistence.delete(m.id)
+
+    await expect(stat(dir)).rejects.toMatchObject({ code: 'ENOENT' })
+    expect((await ctx.sessionPersistence.list()).map(header => header.id)).not.toContain(m.id)
+    expect((await ctx.sessionPersistence.listSnapshots()).map(snapshot => snapshot.header.id)).not.toContain(m.id)
+  })
+
+  it('treats deletion of a never-materialized session as a successful no-op', async () => {
+    const m = meta('delete-unmaterialized', '/work')
+    await ctx.sessionPersistence.create(m)
+    expect((await ctx.sessionPersistence.list()).map(header => header.id)).not.toContain(m.id)
+
+    await expect(ctx.sessionPersistence.delete(m.id)).resolves.toBeUndefined()
+
+    expect((await ctx.sessionPersistence.list()).map(header => header.id)).not.toContain(m.id)
+    expect((await ctx.sessionPersistence.listSnapshots()).map(snapshot => snapshot.header.id))
+      .not.toContain(m.id)
+    await expect(stat(sessionDir(root, m.cwd, m.id))).rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
+  it('refuses deletion while a live session owns the stored prefix', async () => {
+    const m = meta('delete-owned', '/work')
+    const log = oneTurnLog()
+    await ctx.sessionPersistence.create(m)
+    await ctx.sessionPersistence.append(m.id, log)
+    // Drop coordinator tracking while the on-disk prefix remains, so the next
+    // mount takes the adoptLivePrefix path rather than claiming ownerless state.
+    await ctx.fiber.dispose()
+
+    const owned = new Context()
+    await owned.plugin(SessionStore)
+    await owned.plugin(JsonlSessionPersistence, { root, compression: 'none' })
+    let session!: Session
+    await owned.plugin(Object.assign((inner: Context) => {
+      session = inner.sessions.create(m.id, { seed: log, meta: { cwd: '/work' } })
+    }, { inject: ['sessions'] }))
+    await owned.sessions.flush(session)
+
+    try {
+      await expect(owned.sessionPersistence.delete(m.id)).rejects.toThrow(/persistence work is pending/)
+      expect((await stat(sessionDir(root, m.cwd, m.id))).isDirectory()).toBe(true)
+    } finally {
+      await owned.fiber.dispose()
+    }
+  })
+
   it('readRaw returns the stored artifact text verbatim with its original filename', async () => {
     const m = meta('raw-read', '/work')
     await ctx.sessionPersistence.create(m)

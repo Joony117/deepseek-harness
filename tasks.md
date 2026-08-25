@@ -91,8 +91,9 @@ Not tickets — questions that need an answer before they become one.
   says "stop it before deletion" but the dialog offers no way to do that; a "stop and
   delete" affordance, or disabling the menu entry while running, would beat an error after
   confirmation.
-- **Session deletion for the sqlite backend.** It inherits `supportsDeletion = false`
-  deliberately and reports unsupported. Only worth doing if that backend is ever used here.
+- ~~**Session deletion for the sqlite backend.**~~ Done under Bead lq-g4j (2026-08-23):
+  `supportsDeletion = true`, transactional row removal via `coordinator.delete`,
+  non-cascading descendants, focused tests in `sqlite-delete.spec.ts`.
 
 ---
 
