@@ -94,7 +94,7 @@ function commandOutput(
 ): CapturedOutput | undefined {
   const text = snapshot.text
   const end = text.lastIndexOf(marker.end)
-  const status = /^(\d+)\r?\n/.exec(text.slice(end + marker.end.length))?.[1]
+  const status = text.slice(end + marker.end.length).match(/^(\d+)[^\S\r\n]*\r?\n/)?.[1]
   if (status === undefined) return undefined
   const startMarker = text.lastIndexOf(marker.start, end)
   const start = startMarker < 0 ? 0 : startMarker + marker.start.length

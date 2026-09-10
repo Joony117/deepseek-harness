@@ -113,7 +113,12 @@ function commandOutput(
 ): CapturedOutput | undefined {
   const text = snapshot.text
   const end = text.lastIndexOf(marker.end)
-  const status = /^(\d+)\r?\n/.exec(text.slice(end + marker.end.length))?.[1]
+  // pwsh 7 pads the status line out to the terminal cell width, so the digits
+  // are followed by trailing spaces before the newline; Windows PowerShell 5.1
+  // emitted the newline directly. Tolerate the padding without letting the
+  // match run past the line, or completion is missed and the fallback path
+  // leaks the end marker into captured output.
+  const status = text.slice(end + marker.end.length).match(/^(\d+)[^\S\r\n]*\r?\n/)?.[1]
   if (status === undefined) return undefined
   const startMarker = text.lastIndexOf(marker.start, end)
   const start = startMarker < 0 ? 0 : startMarker + marker.start.length

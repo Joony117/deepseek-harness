@@ -89,6 +89,7 @@ type StubMode =
   | 'idle-then-normal'
   | 'large'
   | 'nonzero'
+  | 'padded-status'
   | 'torn-status'
   | 'finish-torn-status'
   | 'end-only'
@@ -207,8 +208,9 @@ class StubPtySession implements TerminalBackendSession {
     const commandOutput = this.mode === 'large'
       ? 'x'.repeat(100)
       : this.mode === 'nonzero' ? '' : 'hello from stub'
-    const exitCode = this.mode === 'nonzero' ? 7 : 0
-    const output = `${start ?? ''}\n${commandOutput}\n${end ?? ''}${exitCode}\n${this.motd}`
+    const exitCode = this.mode === 'nonzero' || this.mode === 'padded-status' ? 7 : 0
+    const statusPad = this.mode === 'padded-status' ? '   ' : ''
+    const output = `${start ?? ''}\n${commandOutput}\n${end ?? ''}${exitCode}${statusPad}\n${this.motd}`
     this.scrollback += output
     if (this.mode === 'exit' || this.mode === 'signal-exit' || this.mode === 'unknown-exit') {
       const exitedOutput = `${start ?? ''}\nhello from stub\n`
@@ -378,6 +380,13 @@ describe('tool-bash-persistent', () => {
 
     session.mode = 'nonzero'
     expect(text(await call(ctx, owner, 'false'))).toBe('[Command finished with exit code 7]')
+
+    // A terminal that pads the status line out to the cell width must still be
+    // recognised as completion; otherwise the fallback path leaks the end marker.
+    session.mode = 'padded-status'
+    const padded = text(await call(ctx, owner, 'padded'))
+    expect(padded).toContain('[exit code: 7]')
+    expect(padded).not.toMatch(/__DSH_PERSISTENT_BASH_END_[^:]+:/)
 
     session.mode = 'exit'
     const exited = text(await call(ctx, owner, 'exit'))
