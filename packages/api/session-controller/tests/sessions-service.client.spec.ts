@@ -723,6 +723,62 @@ describe('fork', () => {
   })
 })
 
+describe('delete', () => {
+  it('forwards the identity and leaves the row to the Host authoritative removal', async () => {
+    const b = bench()
+    await feedList(b, [{ id: 's1' }, { id: 's2' }])
+
+    await expect(b.svc.delete(sid('s1'))).resolves.toEqual({ ok: true, value: { deleted: true } })
+
+    expect(b.api.callsOf('session.delete')).toEqual([{ sessionId: 's1' }])
+    // Success is NOT the client's cue to remove: the Host publishes
+    // `api-session/removed` after durable absence, and that is the one path.
+    await Promise.resolve()
+    expect(b.svc.list.getSnapshot().ids).toEqual(['s1', 's2'])
+
+    b.svc.handleSessionRemoved(sid('s1'))
+    await Promise.resolve()
+    expect(b.svc.list.getSnapshot().ids).toEqual(['s2'])
+  })
+
+  it('keeps the refused row visible and neither removes nor refreshes it', async () => {
+    const b = bench()
+    await feedList(b, [{ id: 's1' }])
+    const listCalls = b.api.callsOf('session.list').length
+    b.api.onDelete = () => Promise.resolve(err(new RemoteError(
+      'session/delete-unavailable',
+      'session "s1" cannot be deleted while it is open',
+      { sessionId: sid('s1'), reason: 'running' },
+    )))
+
+    const result = await b.svc.delete(sid('s1'))
+
+    expect(result.ok).toBe(false)
+    expect(result.ok ? undefined : result.error).toMatchObject({
+      code: 'session/delete-unavailable',
+      details: { reason: 'running' },
+    })
+    await Promise.resolve()
+    // The surviving session stays visible, and no recovery refresh was issued:
+    // a refresh would be recovery, not the fence.
+    expect(b.svc.list.getSnapshot().ids).toEqual(['s1'])
+    expect(b.api.callsOf('session.list')).toHaveLength(listCalls)
+  })
+
+  it('relays the Host error against the still-listed session', async () => {
+    const b = bench()
+    await feedList(b, [{ id: 's1' }])
+    b.svc.open(sid('s1'))
+    const session = b.svc.binding(sid('s1'))?.session
+    expect(session).toBeDefined()
+
+    b.svc.handleSessionError(sid('s1'), 'failed to delete session "s1": read-only volume')
+
+    expect(b.svc.list.getSnapshot().ids).toEqual(['s1'])
+    expect(session?.getSnapshot().lastAgentError).toContain('read-only volume')
+  })
+})
+
 describe('scope lifecycle rides the list mirror (entity parity: no client-side pre-birth)', () => {
   it('a session-added frame births the row (blank) and makes the scope resolvable; removal prunes it', async () => {
     const b = bench()

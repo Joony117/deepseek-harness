@@ -18,7 +18,8 @@ import type { SessionPersistenceRevision } from './revision.ts'
 // Re-export the metadata vocabulary so Consumers import it from the Service Definition.
 export type { SessionHeader } from '@deepseek-ai/dsh-session'
 export { SessionPersistenceRevision } from './revision.ts'
-export { SessionPersistenceNotFoundError } from './errors.ts'
+export { SessionDeleteConflictError, SessionPersistenceNotFoundError } from './errors.ts'
+export type { SessionDeleteConflict } from './errors.ts'
 
 /** Lightweight immutable source identity returned without loading a full log. */
 export interface SessionPersistenceSnapshot {
@@ -283,6 +284,42 @@ export abstract class SessionPersistence extends Service {
    */
   abstract readFrom(id: SessionId, fromSeq: SessionLogOffset, signal?: AbortSignal):
   Promise<SessionEventSuffix>
+
+  /**
+   * Whether this backend can durably remove a stored session. A backend that
+   * declares `true` must override {@link delete}.
+   *
+   * Deletion is optional because absence is a postcondition not every medium can
+   * honor: an append-only or write-once store can stop serving a log but cannot
+   * promise the bytes are gone. Declaring the capability falsely would let a
+   * frontend report a durable deletion that never happened.
+   */
+  readonly supportsDeletion: boolean = false
+
+  /**
+   * Durably remove one session and everything this backend keeps for it.
+   * Resolving means the artifact is gone.
+   *
+   * Removing an identity with no stored artifact SUCCEEDS: the postcondition is
+   * absence, so retrying a partially-applied delete can reach a clean end state.
+   * Callers test {@link supportsDeletion} first.
+   *
+   * Implementations MUST refuse while the identity is still claimed — a live
+   * owner, a draining disposal, or an outstanding unpublished preparation — and
+   * MUST ensure no capability admitted before the deletion can afterwards
+   * republish the identity or recreate its log. A fresh explicit create MAY
+   * reuse the id as a new incarnation; deletion retires one incarnation, not the
+   * name.
+   * @param _id - the persisted session to remove.
+   * @param signal - optional cancellation for backend delete work.
+   * @throws when this backend does not support deletion.
+   */
+  delete(_id: SessionId, signal?: AbortSignal): Promise<void> {
+    if (signal?.aborted === true) {
+      return Promise.reject(signal.reason instanceof Error ? signal.reason : new Error('aborted'))
+    }
+    return Promise.reject(new Error('this session persistence backend does not support deletion'))
+  }
 
   /**
    * Lightweight listing from metadata, without a full-log parse.

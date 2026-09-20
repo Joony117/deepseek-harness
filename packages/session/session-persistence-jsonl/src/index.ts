@@ -9,7 +9,7 @@
 import { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import { readdirSync } from 'node:fs'
-import { open, mkdir, readFile, readdir, realpath, link, rm, stat, truncate } from 'node:fs/promises'
+import { open, mkdir, readFile, readdir, realpath, link, lstat, rm, stat, truncate } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import { performance } from 'node:perf_hooks'
 import { scheduler } from 'node:timers/promises'
@@ -201,6 +201,12 @@ export class JsonlSessionPersistence extends SessionPersistence implements Persi
 
   load(id: SessionId): Promise<SessionInspection> {
     return this.coordinator.load(id)
+  }
+
+  override readonly supportsDeletion = true
+
+  override delete(id: SessionId, signal?: AbortSignal): Promise<void> {
+    return this.coordinator.delete(id, signal)
   }
 
   inspect(id: SessionId, signal?: AbortSignal): Promise<SessionInspection> {
@@ -459,6 +465,90 @@ export class JsonlSessionPersistence extends SessionPersistence implements Persi
   /** Materialize a header-only JSONL artifact for an explicitly durable empty session. */
   async materializeHeader(storage: SessionStorageMetadata): Promise<void> {
     await this.materialize(storage, [])
+  }
+
+  /**
+   * Remove one session's artifact directory. Resolution goes through the same
+   * {@link findLog} every read uses, so deletion inherits its duplicate-id and
+   * encoding-mismatch refusals instead of recomputing a path from metadata that
+   * a caller could have supplied a stale copy of.
+   *
+   * findLog matches on the ENCODED ID IN THE DIRECTORY NAME and never opens the
+   * file, so the stored header is checked here as well. Without that check a
+   * tampered or crash-corrupted artifact whose header names a different session
+   * is removed under the requested id: the caller is told its delete succeeded
+   * while another session’s only log is gone. Every other refusal in this
+   * backend can be retried; a recursive rm cannot, so it is worth one header read.
+   *
+   * A zero-byte artifact identifies nobody, so it is still this id's own
+   * directory and stays deletable. Anything with bytes in it must produce a
+   * header that parses AND matches, or the delete is refused: "unparseable" is
+   * not "anonymous". Two traps make that stricter than it first looks.
+   *
+   * First, emptiness is decided by {@link stat}, not by the header read. Both
+   * readers answer undefined for a reason other than an empty file, and not the
+   * same reason: {@link readFirstLine} at EOF before a newline,
+   * {@link readFirstZstdLine} when frame zero is present but incomplete. Either
+   * way a complete header naming another session, torn by a crash, is
+   * indistinguishable from an empty one at that layer - and treating it as
+   * anonymous would rm that session's only log.
+   *
+   * Second, an unparseable header is not necessarily an anonymous one.
+   * {@link parseHeaderMeta} answers undefined for malformed fields that carry no
+   * identity at all (a negative `delegationDepth`, an unknown `origin`), so a
+   * header that plainly reads `"id":"other"` can still fail to parse. It can
+   * also THROW rather than answer undefined - a foreign format version, or a
+   * retired policy field - and that rejection propagates out of this method, so
+   * the delete is refused there too.
+   *
+   * The artifact owns its own directory (`<project>/<encoded id>/session.jsonl`),
+   * so removing that directory removes everything this backend keeps for the
+   * identity. The project directory above it is shared and is never touched.
+   */
+  async deleteStored(id: SessionId, signal?: AbortSignal): Promise<void> {
+    signal?.throwIfAborted()
+    await this.ensureRootEncoding()
+    signal?.throwIfAborted()
+    const path = await this.findLog(id, signal)
+    // Absence is the postcondition, not a failure.
+    if (path === undefined) return
+    signal?.throwIfAborted()
+    // Header-only read, the same one listing uses, so this scales with session
+    // count rather than log size.
+    const first = this.compression === 'zstd'
+      ? await this.readFirstZstdLine(path, signal)
+      : await this.readFirstLine(path, signal)
+    signal?.throwIfAborted()
+    // An undefined first line does NOT mean "no header bytes": the raw reader
+    // answers undefined at EOF before a newline, the zstd reader when frame zero
+    // is incomplete, so a complete header naming another session that a crash
+    // left torn arrives here looking exactly like an empty file. Ask the
+    // filesystem which one it is.
+    const { size } = await stat(path)
+    signal?.throwIfAborted()
+    // Only a zero-byte artifact claims nobody and stays deletable.
+    if (size > 0) {
+      const meta = first === undefined || first === '' ? undefined : parseHeaderMeta(first)
+      // Bytes that exist but do not parse may still name another session in a
+      // field the parser never reached, so the safe answer is to refuse. Every
+      // other refusal in this backend is retryable; the rm below is not.
+      if (meta === undefined) throw this.unidentifiableHeader(path)
+      await this.assertStoredIdentity(path, meta, id, signal)
+    }
+    signal?.throwIfAborted()
+    // The header proved who owns the BYTES; it did not prove what the removal
+    // TARGET is. `findLog` opens through the session directory and `stat`
+    // follows links, so a junction standing where that directory should be
+    // satisfies every check above. Measured on this platform, `rm` unlinks such
+    // a link without descending into it, so the hazard is not the target's
+    // contents - it is the false report: the link disappears, `exists` answers
+    // false, and a durable removal is published for a log still sitting on disk.
+    // `docs/defensive-patterns.md` reserves recursive removal for known real
+    // directories; refusing is the only answer that stays honest either way.
+    const dir = dirname(path)
+    if ((await lstat(dir)).isSymbolicLink()) throw this.linkShapedDirectory(dir)
+    signal?.throwIfAborted()
+    await rm(dir, { recursive: true, force: true })
   }
 
   /**
@@ -958,6 +1048,22 @@ export class JsonlSessionPersistence extends SessionPersistence implements Persi
       `session artifact ${JSON.stringify(path)} uses ${logSuffix(this.oppositeCompression())}, `
       + `but this backend is configured for compression ${JSON.stringify(this.compression)}; `
       + 'use a separate root or select the matching compression mode',
+    )
+  }
+
+  private unidentifiableHeader(path: string): Error {
+    return new Error(
+      `session artifact ${JSON.stringify(path)} has a header line that cannot be parsed, `
+      + 'so deletion cannot prove which session owns it; '
+      + 'inspect or move the artifact by hand instead of deleting it',
+    )
+  }
+
+  private linkShapedDirectory(path: string): Error {
+    return new Error(
+      `session directory ${JSON.stringify(path)} is a link rather than a real directory, `
+      + 'so removing it would report a deletion it did not perform; '
+      + 'inspect or move the artifact by hand instead of deleting it',
     )
   }
 

@@ -9,7 +9,7 @@ import type {
 import type { SessionPendingInteractionSnapshot } from '@deepseek-ai/dsh-client-ui-session/client'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import { zh as commonZh } from '@deepseek-ai/dsh-client-locale/src/locales/zh.ts'
-import type { WorkspaceBrowserProps } from '../src/client/contract/slots.ts'
+import type { SessionDeleteFailure, WorkspaceBrowserProps } from '../src/client/contract/slots.ts'
 import { createWorkspaceViewStore, FLAT_SESSION_ORDER_KEY } from '../src/client/stores.ts'
 import { UNGROUPED_KEY } from '../src/client/tree.ts'
 import { WorkspaceBrowser } from '../src/client/rows/WorkspaceBrowser.tsx'
@@ -61,6 +61,24 @@ function dragData(): Pick<DataTransfer, 'effectAllowed' | 'dropEffect' | 'setDat
   return { effectAllowed: 'uninitialized', dropEffect: 'none', setData: vi.fn() }
 }
 
+/**
+ * Text of every rendered session/workspace row. The delete fence is asserted
+ * against this: a refused or in-flight target must still be listed, because
+ * only the Host's authoritative removal may take a row away.
+ */
+const rowTexts = (): string[] => screen.getAllByRole('treeitem').map(row => row.textContent ?? '')
+const listsRow = (title: string): boolean => rowTexts().some(text => text.includes(title))
+
+/** Open the browser-owned single-session delete confirmation from a row menu. */
+function openSessionDelete(title: string): void {
+  fireEvent.click(screen.getByRole('button', { name: `会话“${title}”的操作` }))
+  fireEvent.click(screen.getByRole('menuitem', { name: '删除会话' }))
+}
+
+/** The confirm button shared by the single and bulk delete dialogs. */
+const deleteConfirm = (): HTMLButtonElement =>
+  screen.getByRole<HTMLButtonElement>('button', { name: '删除会话' })
+
 function mount(overrides: Partial<WorkspaceBrowserProps> = {}) {
   const store = createWorkspaceViewStore().create()
   const props: WorkspaceBrowserProps = {
@@ -80,6 +98,7 @@ function mount(overrides: Partial<WorkspaceBrowserProps> = {}) {
     renameWorkspace: vi.fn(async () => {}),
     deleteWorkspace: vi.fn(async () => {}),
     archiveSession: vi.fn(async () => {}),
+    deleteSession: vi.fn(async () => undefined),
     insertWorkspaceBefore: vi.fn(async () => {}),
     insertSessionBefore: vi.fn(async () => {}),
     createWorkspace: vi.fn(async () => workspace('created', [])),
@@ -451,6 +470,289 @@ describe('WorkspaceBrowser', () => {
     } finally {
       warn.mockRestore()
     }
+  })
+
+  // --- Session deletion -----------------------------------------------------
+  // The fence for every test below: the row stays visible until durable
+  // success. Deletion removes nothing locally — the Host publishes
+  // `api-session/removed` only after confirming durable absence — and no
+  // failure path refreshes, because that is recovery, not the fence.
+
+  it('keeps a refused session listed, with its refusal message, and never removes the row itself', async () => {
+    const deleteSession = vi.fn(async (): Promise<SessionDeleteFailure> =>
+      ({ reason: 'persistence-conflict', message: 'delete unavailable' }))
+    mount({
+      useSessions: hook(sessionState([summary('keep-s', 2), summary('other-s', 1)])),
+      useWorkspaces: hook(workspaceState([workspace('alpha', ['keep-s', 'other-s'])])),
+      deleteSession,
+    })
+    fireEvent.click(screen.getByText('alpha'))
+    openSessionDelete('keep-s')
+    const dialog = screen.getByRole('dialog', { name: '删除会话' })
+    expect(dialog.textContent).toContain('将永久删除“keep-s”的会话记录')
+    expect(dialog.textContent).toContain('此操作无法撤销')
+
+    fireEvent.click(deleteConfirm())
+    expect(screen.getByRole('status').textContent).toBe('正在删除会话…')
+    await waitFor(() => {
+      expect(screen.getByRole('alert').textContent).toBe('该会话的存储正在占用中，请稍后重试。')
+    })
+    expect(deleteSession).toHaveBeenCalledOnce()
+    expect(deleteSession).toHaveBeenCalledWith(sid('keep-s'))
+    // THE FENCE. A refusal leaves the surviving Session visible WITH its
+    // error: the row is still listed, the dialog is still open for retry, and
+    // the untouched sibling is undisturbed.
+    expect(listsRow('keep-s')).toBe(true)
+    expect(listsRow('other-s')).toBe(true)
+    expect(screen.getByRole('dialog', { name: '删除会话' })).toBeTruthy()
+  })
+
+  it('renders a real message for every refusal code and for a code-less backend failure', async () => {
+    const failures: SessionDeleteFailure[] = [
+      { reason: 'running', message: 'generic host sentence' },
+      { reason: 'stale-handle', message: 'generic host sentence' },
+      { reason: 'subagent-owned', message: 'generic host sentence' },
+      { reason: 'foreign-agent', message: 'generic host sentence' },
+      { reason: 'unsupported', message: 'generic host sentence' },
+      { message: 'backend unreachable' },
+    ]
+    const deleteSession = vi.fn(async () => failures.shift())
+    mount({
+      useSessions: hook(sessionState([summary('doomed-s', 1)])),
+      useWorkspaces: hook(workspaceState([workspace('alpha', ['doomed-s'])])),
+      deleteSession,
+    })
+    fireEvent.click(screen.getByText('alpha'))
+    openSessionDelete('doomed-s')
+    // The Host sends one generic sentence for every refusal, so the code — not
+    // its message — has to be what the user reads. A structural change to the
+    // failure shape must not degrade into String(reason) / "[object Object]".
+    for (const expected of [
+      '该会话正在运行，请先停止后再删除。',
+      '该会话的句柄已过期，请刷新后重试。',
+      '该会话由子智能体路由持有，请从其父会话操作。',
+      '该会话由其他服务激活，本端无权拆除其运行态。',
+      '当前存储后端不支持删除会话。',
+      'backend unreachable',
+    ]) {
+      fireEvent.click(deleteConfirm())
+      await waitFor(() => { expect(screen.getByRole('alert').textContent).toBe(expected) })
+      expect(screen.getByRole('alert').textContent).not.toContain('[object Object]')
+      expect(listsRow('doomed-s')).toBe(true)
+    }
+    expect(deleteSession).toHaveBeenCalledTimes(6)
+  })
+
+  it('refuses at confirm time when the target starts running after the dialog opened', () => {
+    const deleteSession = vi.fn(async () => undefined)
+    const b = mount({
+      useSessions: hook(sessionState([summary('busy-s', 1)])),
+      useWorkspaces: hook(workspaceState([workspace('alpha', ['busy-s'])])),
+      deleteSession,
+    })
+    fireEvent.click(screen.getByText('alpha'))
+    openSessionDelete('busy-s')
+    expect(deleteConfirm().disabled).toBe(false)
+
+    // One status frame lands between opening the dialog and confirming: the
+    // dialog re-reads the live snapshot rather than the identity it captured.
+    rerender(b, { useSessions: hook(sessionState([summary('busy-s', 1, { running: true })])) })
+    expect(deleteConfirm().disabled).toBe(true)
+    expect(screen.getByRole('dialog', { name: '删除会话' }).textContent)
+      .toContain('“busy-s”正在运行，请先停止后再删除。')
+    fireEvent.click(deleteConfirm())
+    expect(deleteSession).not.toHaveBeenCalled()
+    expect(listsRow('busy-s')).toBe(true)
+  })
+
+  it('bulk picker offers only ordinary rows, disables running ones, and keeps blank rows out', () => {
+    const blank = summary('blank-s', 4, { blank: true, displayTitle: 'ignored' })
+    mount({
+      useSessions: hook(sessionState(
+        [blank, summary('idle-s', 3), summary('run-s', 2, { running: true }), summary('gone-s', 1)],
+        { current: blank.id },
+      )),
+      useWorkspaces: hook(workspaceState(
+        [workspace('alpha', ['blank-s', 'idle-s', 'run-s', 'gone-s'])],
+        [sid('gone-s')],
+      )),
+    })
+    fireEvent.click(screen.getByRole('button', { name: '批量删除会话' }))
+    const picker = screen.getByRole('dialog', { name: '选择要删除的会话' })
+    // Exactly the ordinary browsing surface with nothing selected: the blank
+    // placeholder (visible only as the current selection) and the archived row
+    // are not bulk targets.
+    expect(picker.textContent).not.toContain('新会话')
+    expect(picker.textContent).not.toContain('gone-s')
+    expect(picker.textContent).toContain('idle-s')
+    expect(picker.textContent).toContain('run-s')
+    // Opaque id is shown beside the exact display title.
+    expect(picker.textContent).toContain('进行中')
+
+    const boxes = screen.getAllByRole<HTMLInputElement>('checkbox')
+    expect(boxes).toHaveLength(2)
+    const running = boxes[1] as HTMLInputElement
+    expect(running.disabled).toBe(true)
+    fireEvent.click(running)
+    expect(running.checked).toBe(false)
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: '继续' }).disabled).toBe(true)
+  })
+
+  it('bulk deletes the confirmed snapshot in host list order, one target at a time', async () => {
+    const resolvers: (() => void)[] = []
+    const deleteSession = vi.fn(() => new Promise<SessionDeleteFailure | undefined>((resolve) => {
+      resolvers.push(() => { resolve(undefined) })
+    }))
+    mount({
+      useSessions: hook(sessionState([summary('a-s', 3), summary('b-s', 2), summary('c-s', 1)])),
+      useWorkspaces: hook(workspaceState([workspace('alpha', ['a-s', 'b-s', 'c-s'])])),
+      deleteSession,
+    })
+    fireEvent.click(screen.getByText('alpha'))
+    fireEvent.click(screen.getByRole('button', { name: '批量删除会话' }))
+    const boxes = screen.getAllByRole<HTMLInputElement>('checkbox')
+    // Checked bottom-up; the run still follows the snapshot's list order.
+    fireEvent.click(boxes[2] as HTMLInputElement)
+    fireEvent.click(boxes[0] as HTMLInputElement)
+    fireEvent.click(screen.getByRole('button', { name: '继续' }))
+    const confirm = screen.getByRole('dialog', { name: '删除会话' })
+    expect(confirm.textContent).toContain('将永久删除下列会话记录')
+    expect(confirm.textContent).toContain('a-s')
+    expect(confirm.textContent).toContain('c-s')
+    expect(confirm.textContent).not.toContain('b-s')
+
+    fireEvent.click(deleteConfirm())
+    // There is deliberately no atomic bulk verb: one target is in flight and
+    // the next is not sent until it settles.
+    await waitFor(() => { expect(deleteSession).toHaveBeenCalledTimes(1) })
+    expect(deleteSession).toHaveBeenLastCalledWith(sid('a-s'))
+    expect(screen.getByRole('status').textContent).toBe('正在删除会话…')
+    await act(async () => { resolvers[0]?.() })
+    expect(deleteSession).toHaveBeenCalledTimes(2)
+    expect(deleteSession).toHaveBeenLastCalledWith(sid('c-s'))
+    // Nothing was removed locally while the run was in flight.
+    expect(listsRow('a-s')).toBe(true)
+    await act(async () => { resolvers[1]?.() })
+    expect(screen.queryByRole('dialog', { name: '删除会话' })).toBeNull()
+    expect(deleteSession).toHaveBeenCalledTimes(2)
+  })
+
+  it('one refused bulk target keeps its own row and error while the others still delete', async () => {
+    const deleteSession = vi.fn(async (sessionId: SessionId): Promise<SessionDeleteFailure | undefined> =>
+      sessionId === sid('bad-s') ? { reason: 'subagent-owned', message: 'generic host sentence' } : undefined)
+    mount({
+      useSessions: hook(sessionState([summary('good-s', 3), summary('bad-s', 2), summary('tail-s', 1)])),
+      useWorkspaces: hook(workspaceState([workspace('alpha', ['good-s', 'bad-s', 'tail-s'])])),
+      deleteSession,
+    })
+    fireEvent.click(screen.getByText('alpha'))
+    fireEvent.click(screen.getByRole('button', { name: '批量删除会话' }))
+    for (const box of screen.getAllByRole<HTMLInputElement>('checkbox')) fireEvent.click(box)
+    fireEvent.click(screen.getByRole('button', { name: '继续' }))
+    fireEvent.click(deleteConfirm())
+
+    await waitFor(() => { expect(screen.getAllByRole('alert')).toHaveLength(1) })
+    // A failure mid-run does not abort the rest: every target was attempted.
+    expect(deleteSession).toHaveBeenCalledTimes(3)
+    expect(deleteSession.mock.calls.map(([id]) => id)).toEqual([sid('good-s'), sid('bad-s'), sid('tail-s')])
+    const alert = screen.getByRole('alert')
+    expect(alert.textContent).toContain('bad-s')
+    expect(alert.textContent).toContain('该会话由子智能体路由持有，请从其父会话操作。')
+    // The confirmation narrows to the survivor; the succeeded targets and every
+    // other row are left exactly as they were for the Host echo to resolve.
+    const dialog = screen.getByRole('dialog', { name: '删除会话' })
+    expect(dialog.textContent).toContain('bad-s')
+    expect(listsRow('good-s')).toBe(true)
+    expect(listsRow('bad-s')).toBe(true)
+    expect(listsRow('tail-s')).toBe(true)
+  })
+
+  it('skips a bulk target that started running mid-run and reports it against that target only', async () => {
+    const deleteSession = vi.fn(async () => undefined)
+    const running = sessionState([summary('first-s', 2, { running: false }), summary('second-s', 1, { running: true })])
+    const b = mount({
+      useSessions: hook(sessionState([summary('first-s', 2), summary('second-s', 1)])),
+      useWorkspaces: hook(workspaceState([workspace('alpha', ['first-s', 'second-s'])])),
+      deleteSession,
+    })
+    fireEvent.click(screen.getByText('alpha'))
+    fireEvent.click(screen.getByRole('button', { name: '批量删除会话' }))
+    for (const box of screen.getAllByRole<HTMLInputElement>('checkbox')) fireEvent.click(box)
+    fireEvent.click(screen.getByRole('button', { name: '继续' }))
+    // The status frame lands after the snapshot was confirmed; the loop reads
+    // the live list per target, not the one captured when it started.
+    rerender(b, { useSessions: hook(running) })
+    fireEvent.click(deleteConfirm())
+
+    await waitFor(() => { expect(screen.getAllByRole('alert')).toHaveLength(1) })
+    expect(deleteSession).toHaveBeenCalledOnce()
+    expect(deleteSession).toHaveBeenCalledWith(sid('first-s'))
+    expect(screen.getByRole('alert').textContent).toContain('“second-s”正在运行，请先停止后再删除。')
+    expect(listsRow('second-s')).toBe(true)
+  })
+
+  it('holds the row through durable success and drops it only on the Host removal echo', async () => {
+    const deleteSession = vi.fn(async () => undefined)
+    const b = mount({
+      useSessions: hook(sessionState([summary('cur-s', 2), summary('keep-s', 1)], { current: sid('cur-s') })),
+      useWorkspaces: hook(workspaceState([workspace('alpha', ['cur-s', 'keep-s'])])),
+      deleteSession,
+    })
+    // The group holding the current Session is auto-expanded on mount.
+    expect(screen.getAllByRole('treeitem').some(row => row.getAttribute('aria-selected') === 'true')).toBe(true)
+    openSessionDelete('cur-s')
+    fireEvent.click(deleteConfirm())
+    await waitFor(() => { expect(screen.queryByRole('dialog', { name: '删除会话' })).toBeNull() })
+    // Durable success closes the dialog and still removes nothing: the row is
+    // the Host's to retract.
+    expect(listsRow('cur-s')).toBe(true)
+
+    // The echo. rc.1 derives `current` from the listed ids, so dropping the row
+    // clears the selection on its own — no navigation-watcher pass and no
+    // clearSelection() call are needed to land in the New Session view.
+    rerender(b, { useSessions: hook(sessionState([summary('keep-s', 1)])) })
+    expect(listsRow('cur-s')).toBe(false)
+    expect(listsRow('keep-s')).toBe(true)
+    expect(screen.getAllByRole('treeitem').some(row => row.getAttribute('aria-selected') === 'true')).toBe(false)
+  })
+
+  it('the blank New Session row carries Delete alone, on its localized placeholder title', () => {
+    const blank = summary('blank-s', 1, { blank: true, displayTitle: 'ignored' })
+    const deleteSession = vi.fn(async () => undefined)
+    mount({
+      useSessions: hook(sessionState([blank], { current: blank.id })),
+      useWorkspaces: hook(workspaceState([workspace('alpha', ['blank-s'])])),
+      deleteSession,
+    })
+    // The group holding the current Session is auto-expanded on mount.
+    // Delete targets the Session identity, which a blank row does have; the
+    // verbs that act on content stay off until the first prompt.
+    fireEvent.click(screen.getByRole('button', { name: '会话“新会话”的操作' }))
+    expect(screen.getAllByRole('menuitem')).toHaveLength(1)
+    fireEvent.click(screen.getByRole('menuitem', { name: '删除会话' }))
+    expect(screen.getByRole('dialog', { name: '删除会话' }).textContent)
+      .toContain('将永久删除“新会话”的会话记录')
+    fireEvent.click(deleteConfirm())
+    expect(deleteSession).toHaveBeenCalledWith(blank.id)
+  })
+
+  it('Cancel, Escape, and Close dismiss session deletion without calling the action', () => {
+    const deleteSession = vi.fn(async () => undefined)
+    mount({
+      useSessions: hook(sessionState([summary('safe-s', 1)])),
+      useWorkspaces: hook(workspaceState([workspace('alpha', ['safe-s'])])),
+      deleteSession,
+    })
+    fireEvent.click(screen.getByText('alpha'))
+    openSessionDelete('safe-s')
+    fireEvent.click(screen.getByRole('button', { name: '取消' }))
+    openSessionDelete('safe-s')
+    fireEvent.keyDown(document, { key: 'Escape' })
+    openSessionDelete('safe-s')
+    fireEvent.click(screen.getByRole('button', { name: '关闭' }))
+    expect(deleteSession).not.toHaveBeenCalled()
+    expect(screen.queryByRole('dialog', { name: '删除会话' })).toBeNull()
+    expect(listsRow('safe-s')).toBe(true)
   })
 
   it('renders a fork child as a top-level row without a session twist', () => {

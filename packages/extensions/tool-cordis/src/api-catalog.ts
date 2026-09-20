@@ -1402,6 +1402,12 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         returns: 'the new Session identity.',
       },
       {
+        signature: '@Remote(\'delete\') delete(request: SessionDeleteRequest, signal: AbortSignal): Promise<SessionDeleteValue>',
+        description: 'Durably delete one Session after releasing any lifecycle this Host owns. The client-facing row survives until the backend confirms absence: a refusal or a backend failure leaves it visible, with an error.',
+        parameters: [{ name: 'request', description: 'Session identity to remove.' }, { name: 'signal', description: 'caller cancellation for the persistence delete.' }],
+        returns: 'acknowledgement that the durable artifact is gone.',
+      },
+      {
         signature: '@Remote(\'prompt\') prompt(request: SessionPromptRequest, signal: AbortSignal): Promise<SessionPromptValue>',
         description: 'Admit one prompt after explicitly resuming its Session.',
         parameters: [{ name: 'request', description: 'Session identity, prompt content, source metadata, and delivery mode.' }, { name: 'signal', description: 'caller cancellation before prompt admission begins.' }],
@@ -1527,6 +1533,17 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         returns: 'storage metadata, the requested offset, and stored events with `seq >= fromSeq`.',
       },
       {
+        signature: 'readonly supportsDeletion: boolean = false',
+        description: 'Whether this backend can durably remove a stored session. A backend that declares `true` must override delete.\n\nDeletion is optional because absence is a postcondition not every medium can honor: an append-only or write-once store can stop serving a log but cannot promise the bytes are gone. Declaring the capability falsely would let a frontend report a durable deletion that never happened.',
+        parameters: [],
+      },
+      {
+        signature: 'delete(_id: SessionId, signal?: AbortSignal): Promise<void>',
+        description: 'Durably remove one session and everything this backend keeps for it. Resolving means the artifact is gone.\n\nRemoving an identity with no stored artifact SUCCEEDS: the postcondition is absence, so retrying a partially-applied delete can reach a clean end state. Callers test supportsDeletion first.\n\nImplementations MUST refuse while the identity is still claimed — a live owner, a draining disposal, or an outstanding unpublished preparation — and MUST ensure no capability admitted before the deletion can afterwards republish the identity or recreate its log. A fresh explicit create MAY reuse the id as a new incarnation; deletion retires one incarnation, not the name.',
+        parameters: [{ name: '_id', description: 'the persisted session to remove.' }, { name: 'signal', description: 'optional cancellation for backend delete work.' }],
+        throws: ['when this backend does not support deletion.'],
+      },
+      {
         signature: 'abstract list(signal?: AbortSignal): Promise<SessionHeader[]>',
         description: 'Lightweight listing from metadata, without a full-log parse.',
         parameters: [{ name: 'signal', description: 'optional cancellation for backend listing work.' }],
@@ -1543,7 +1560,7 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
   {
     key: 'sessionProjectionCache',
     summary: 'The persisted projection cache service.',
-    description: 'The persisted projection cache service. Opens the `session_projcache` domain at init, checkpoints live sessions on a throttled write-behind (count/interval triggers from Config) plus three mandatory points — session creation, `turn/end`, and session disposal (the live-to-cold moment) — and serves the cached rows for a session header. Every durable write is fail-soft: failures log a warning and the cache self-heals on the next write.',
+    description: 'The persisted projection cache service. Opens the `session_projcache` domain at init, checkpoints live sessions on a throttled write-behind (count/interval triggers from Config) plus three mandatory points — session creation, `turn/end`, and session disposal (the live-to-cold moment) — and serves the cached rows for a session header. Every durable write is fail-soft: failures log a warning and the cache self-heals on the next write. `cleanup` reclaims rows for sessions the caller reports as gone; it never removes a session log and never consults the persistence layer.',
     methods: [
       {
         signature: 'cachedSnapshot( meta: SessionHeader, inheritedEventCount: SessionLogOffset, keys?: readonly Extract<keyof SessionProjectionMap, string>[], ): ProjectionSnapshot | undefined',
@@ -1568,6 +1585,12 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         description: 'Cold-read one session\'s projections from its complete log. Each unit is seeded from the identity-checked cached rows — the registry skips `apply` for the already-folded prefix (events at or below the row\'s `seq`) — and the refreshed checkpoint is written back (fail-soft, fire-and-forget), so the first cold read creates the cache row and later ones seed from it. The caller supplies the complete log in seq order: this service never consults the persistence layer.',
         parameters: [{ name: 'meta', description: 'the stored session header (identity witness).' }, { name: 'inheritedEventCount', description: 'exact inherited prefix length for projection initialization and identity.' }, { name: 'events', description: 'the session\'s complete log, in seq order.' }],
         returns: 'the projection cut at the log end.',
+      },
+      {
+        signature: 'async cleanup( validIds: Iterable<SessionId>, options: { dryRun: boolean; signal?: AbortSignal }, ): Promise<{ stale: SessionId[]; deleted: SessionId[] }>',
+        description: 'Drop cache rows whose ids are absent from `validIds` — the caller\'s authoritative valid-session set. Snapshots table keys before any mutation. A row is stale only when that set omits its id; `ctx.sessions` residency, log identity, and session directories are not consulted. `dryRun: true` reports stale ids and performs zero deletes. Apply mode calls only KvTable.delete; `deleted` is the subset that actually existed.\n\nThe valid set is a PARAMETER, not a persistence `list` this service calls itself. Our pre-upgrade version injected `sessionPersistence` and listed internally; rc.1 states the opposite invariant for the sibling cold read ("this service never consults the persistence layer") and dropped that inject. Taking the set as an argument preserves the old behavior and return shape without reintroducing the dependency — the deletion frontend already holds persistence and lists there.\n\nNEVER deletes a session log. This reclaims a read model, and the direction of that dependency is what stops a cache bug from destroying user data.\n\nA durable deletion leaves its row behind until a sweep runs. That is deliberate: the cache is defined as possibly stale but never wrong, and a frontend that must not show the row after a delete drops that one id rather than making every delete wait on a full listing.',
+        parameters: [{ name: 'validIds', description: 'every session id that still exists; everything else is stale.' }, { name: 'options', description: 'required `dryRun`; optional `signal` checked before any work and between deletes.' }],
+        returns: 'stale ids in sorted order, and the ids actually removed (empty on dry-run).',
       },
     ],
   },
@@ -4841,6 +4864,14 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'SessionCreateValue',
     declaration: 'export interface SessionCreateValue {\n    readonly sessionId: SessionId;\n    readonly agentPreset?: string;\n}',
+  },
+  {
+    name: 'SessionDeleteRequest',
+    declaration: 'export interface SessionDeleteRequest {\n    readonly sessionId: SessionId;\n}',
+  },
+  {
+    name: 'SessionDeleteValue',
+    declaration: 'export interface SessionDeleteValue {\n    readonly deleted: true;\n}',
   },
   {
     name: 'SessionEvent',

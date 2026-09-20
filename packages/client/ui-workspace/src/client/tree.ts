@@ -127,8 +127,16 @@ function byRecency(a: SessionSummary, b: SessionSummary): number {
  * is visible. Subagent children use their parent header catalog; archived
  * sessions are visible nowhere, while their accounting slots remain so
  * unarchiving restores position.
+ *
+ * Exported because the bulk-delete picker offers exactly the rows this
+ * predicate admits with no current selection — a second copy of the rule
+ * would drift the moment a visibility condition is added here.
+ * @param session - one session list row.
+ * @param current - the selected session id, which alone unhides a blank row.
+ * @param archived - the registry-global archive set.
+ * @returns true when the row belongs on an ordinary browsing surface.
  */
-function sessionVisible(session: SessionSummary, current: SessionId | undefined, archived: ReadonlySet<SessionId>): boolean {
+export function sessionVisible(session: SessionSummary, current: SessionId | undefined, archived: ReadonlySet<SessionId>): boolean {
   return session.origin !== 'subagent'
     && !archived.has(session.id)
     && (!session.blank || session.id === current)

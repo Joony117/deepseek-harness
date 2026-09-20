@@ -423,16 +423,36 @@ describe('workspace browser rows', () => {
     expect(screen.queryByRole('button', { name: /工作区/ })).toBeNull()
   })
 
-  it('blank New Session rows carry no menu, no time label, and no hover-card time', () => {
+  it('blank New Session rows expose Delete only, and no menu at all without onDelete', () => {
     vi.useFakeTimers()
     try {
+      const onDelete = vi.fn()
+      const onRename = vi.fn()
+      const onFork = vi.fn()
+      const onArchive = vi.fn()
       const node: SessionNode = {
         id: sid('s-blank'), title: 'ignored', blank: true, running: false,
         runningSubagentCount: 0, completed: false, hasActiveSchedule: false, updatedAt: 0,
       }
-      render(<SessionNodeItem node={node} currentId={node.id} now={0} onOpen={vi.fn()}
-        onRename={vi.fn()} onFork={vi.fn()} onArchive={vi.fn()} t={t} />)
-      // The placeholder has no content yet: no row verbs, no "now" stamp.
+      const view = render(<SessionNodeItem node={node} currentId={node.id} now={0} onOpen={vi.fn()}
+        onRename={onRename} onFork={onFork} onArchive={onArchive} onDelete={onDelete} t={t} />)
+      // Delete acts on the session identity, which a blank row has; the verbs
+      // that act on content do not appear, and there is still no "now" stamp.
+      expect(screen.queryByText('刚刚')).toBeNull()
+      fireEvent.click(screen.getByRole('button', { name: '会话“新会话”的操作' }))
+      expect(screen.getAllByRole('menuitem')).toHaveLength(1)
+      expect(screen.queryByRole('menuitem', { name: '重命名' })).toBeNull()
+      expect(screen.queryByRole('menuitem', { name: '分叉会话' })).toBeNull()
+      expect(screen.queryByRole('menuitem', { name: '归档会话' })).toBeNull()
+      fireEvent.click(screen.getByRole('menuitem', { name: '删除会话' }))
+      // The dialog prefill is the localized placeholder, not the stored title.
+      expect(onDelete).toHaveBeenCalledWith(node.id, '新会话')
+      expect(onRename).not.toHaveBeenCalled()
+      expect(onFork).not.toHaveBeenCalled()
+      expect(onArchive).not.toHaveBeenCalled()
+      // Without onDelete the placeholder keeps upstream's no-menu contract.
+      view.rerender(<SessionNodeItem node={node} currentId={node.id} now={0} onOpen={vi.fn()}
+        onRename={onRename} onFork={onFork} onArchive={onArchive} t={t} />)
       expect(screen.queryByRole('button', { name: /会话.*的操作/ })).toBeNull()
       expect(screen.queryByText('刚刚')).toBeNull()
       // The hover card keeps title + status but drops the timestamp line.
@@ -448,17 +468,18 @@ describe('workspace browser rows', () => {
     }
   })
 
-  it('session row menu opens without opening the session and dispatches rename, fork, and archive', () => {
+  it('session row menu opens without opening the session and dispatches rename, fork, archive, and delete', () => {
     const onOpen = vi.fn()
     const onRename = vi.fn()
     const onFork = vi.fn()
     const onArchive = vi.fn()
+    const onDelete = vi.fn()
     const node: SessionNode = {
       id: sid('s1'), title: 'One', blank: false, running: false,
       runningSubagentCount: 0, completed: false, hasActiveSchedule: false, updatedAt: 0,
     }
     render(<SessionNodeItem node={node} currentId={undefined} now={0} onOpen={onOpen}
-      onRename={onRename} onFork={onFork} onArchive={onArchive} t={t} />)
+      onRename={onRename} onFork={onFork} onArchive={onArchive} onDelete={onDelete} t={t} />)
     fireEvent.click(screen.getByRole('button', { name: '会话“One”的操作' }))
     expect(onOpen).not.toHaveBeenCalled()
     // Archive is not destructive (log and accounting slot remain): no danger styling.
@@ -475,6 +496,12 @@ describe('workspace browser rows', () => {
     fireEvent.click(screen.getByRole('button', { name: '会话“One”的操作' }))
     fireEvent.click(screen.getByRole('menuitem', { name: '归档会话' }))
     expect(onArchive).toHaveBeenCalledWith(node.id)
+    // Delete destroys the log, so it is the one destructive row verb.
+    fireEvent.click(screen.getByRole('button', { name: '会话“One”的操作' }))
+    const deleteItem = screen.getByRole('menuitem', { name: '删除会话' })
+    expect(deleteItem.className).toMatch(/danger/)
+    fireEvent.click(deleteItem)
+    expect(onDelete).toHaveBeenCalledWith(node.id, 'One')
     expect(onRename).toHaveBeenCalledOnce()
     expect(onOpen).not.toHaveBeenCalled()
     // Escape closes without selecting (Menu onClose path).

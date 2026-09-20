@@ -243,6 +243,36 @@ export class SessionPreparations<Source extends PreparedSource, CommitState> {
   }
 
   /**
+   * Why an unpublished identity cannot be durably deleted right now.
+   *
+   * Deletion has to tell an outstanding CLAIM on a prepared source apart from a
+   * merely CACHED one, and neither existing accessor can. {@link has} reports a
+   * warm ready entry and an exclusively reserved one identically, so a guard
+   * built on it both over-refuses (a cache entry is not a claim) and
+   * under-protects (it says nothing about pins). {@link invalidate} is unsafe on
+   * its own for the mirror-image reason: it drops an entry regardless of
+   * `pins`, orphaning any live {@link PreparationLease} — whose disposer has by
+   * then silently become inert, since it no-ops once its entry is replaced.
+   *
+   * A ready entry with no pins is only a cache and may be invalidated. Anything
+   * else is a live claim on the identity and blocks deletion.
+   *
+   * This does NOT see a borrower whose entry was already replaced during its
+   * own load: that lease returns a source with an inert disposer and is
+   * invisible here. Such a holder is refused later, at publication, by the
+   * coordinator per-id deletion generation. The two guards cover different
+   * halves of the problem and neither is sufficient alone.
+   * @param id - session identity a caller intends to delete.
+   * @returns the blocking claim, or `undefined` when only a cache (or nothing) exists.
+   */
+  deletionBlocker(id: SessionId): 'loading' | 'committing' | 'reserved' | 'borrowed' | undefined {
+    const entry = this.entries.get(id)
+    if (entry === undefined) return undefined
+    if (entry.phase !== 'ready') return entry.phase
+    return entry.pins > 0 ? 'borrowed' : undefined
+  }
+
+  /**
    * Discard an exact stale ready source without disturbing an exclusive owner.
    * @param id - changed session identity.
    * @param expected - exact source observed before its revision check.

@@ -33,7 +33,7 @@ import type {
   SessionLocation,
   SessionStorageMetadata,
 } from './index.ts'
-import { SessionPersistenceNotFoundError } from './errors.ts'
+import { SessionDeleteConflictError, SessionPersistenceNotFoundError } from './errors.ts'
 import type { SessionPersistenceRevision } from './revision.ts'
 import { observeQueuedAbort, SessionPreparations } from './preparations.ts'
 import type { SessionPreparationReservation } from './preparations.ts'
@@ -193,6 +193,20 @@ export interface PersistenceBackend<TornMarker = unknown> {
   materializeHeader?(storage: SessionStorageMetadata): Promise<void>
 
   /**
+   * Durably remove one stored session and everything this backend keeps for that
+   * identity, across every storage scope {@link loadStored} searches. Resolving
+   * means the artifact is gone. Removing an identity that has no artifact is a
+   * SUCCESS, not an error: the postcondition is absence, and a caller retrying a
+   * partially-applied delete must be able to reach a clean end state.
+   *
+   * A backend that cannot guarantee that postcondition omits the hook entirely,
+   * and the service then reports deletion as unsupported rather than pretending.
+   * @param id - persisted session id to remove.
+   * @param signal - optional cancellation for backend delete work.
+   */
+  deleteStored?(id: SessionId, signal?: AbortSignal): Promise<void>
+
+  /**
    * Durably append a CONTIGUOUS batch, lazily materializing the session first
    * when `!isMaterialized`. The materialize-write and the first event batch MUST
    * commit ATOMICALLY (a crash between them must not leave a materialized-but-
@@ -271,6 +285,8 @@ interface LiveSessionState {
 interface PreparedSessionSource<TornMarker> {
   readonly inspection: SessionInspection
   readonly session: Session
+  /** Per-id deletion generation observed before this source was read. */
+  readonly deletionGeneration: number
   readonly revision: SessionPersistenceRevision
   /** Session length after constructor-owned seed markers were appended. */
   readonly sessionLength: SessionLogOffsetType
@@ -649,6 +665,53 @@ export class PersistenceCoordinator<TornMarker = unknown> {
    * same id, so writes for one session never interleave. Keyed by session id.
    */
   private chains = new Map<SessionId, Promise<unknown>>()
+  /**
+   * Monotonic per-id durable-deletion counter. A prepared Session records the
+   * value it was built under and publication compares the two, so a capability
+   * admitted BEFORE a delete can never resurrect the log afterwards — while a
+   * FRESH explicit create is still free to reuse the id as a new incarnation.
+   *
+   * A counter, not a tombstone set: with a boolean, an id deleted, recreated and
+   * deleted again would compare equal to a stale capability from the second
+   * incarnation and be wrongly admitted.
+   *
+   * Entries are never expired. Revocation information must outlive every
+   * capability that could still be published under it, and a detached borrower
+   * is unbounded and invisible, so nothing here can prove when that is safe.
+   * ponytail: one small integer per deleted id; bound it only if a deployment
+   * ever shows this map to be a real memory problem.
+   */
+  private deletions = new Map<SessionId, number>()
+  /**
+   * Deletion generation each Session was ADMITTED under, keyed by the exact
+   * Session so it is collected with the object. Stamped at both admission
+   * points: {@link prepareCore} for a coordinator-read source, and
+   * {@link initFor} for every publication, which is the only point a session
+   * created through the fresh path passes through.
+   *
+   * Both stamps are load-bearing. Prepare alone misses a fresh session that is
+   * published, disposed, and republished after a delete: absence from this map
+   * would read as "never seen, therefore new" and re-persist the old seed under
+   * a deleted identity. Publication alone misses a borrowed source that is
+   * retained but never published before the delete.
+   *
+   * Absence still means genuinely new, which is what keeps a fresh explicit
+   * create free to reuse a deleted id.
+   */
+  private readonly admittedGeneration = new WeakMap<Session, number>()
+  /**
+   * Ids whose durable deletion has begun and not yet settled.
+   *
+   * The generation counter revokes capabilities only AFTER the backend commits,
+   * which leaves the whole `await deleteStored` window open: {@link initFor}
+   * runs synchronously, outside the per-id promise chain, so a holder can pass
+   * the still-current generation check and publish mid-delete. Its serialized
+   * {@link onCreated} work is queued behind the delete and does eventually
+   * reject, but a rejection there cannot detach an already-published Session.
+   * This set is the admission state that window needs, and it is why the
+   * publication guard is two checks rather than one.
+   */
+  private readonly deleting = new Set<SessionId>()
   /** Resolved fixed write-batching window shared by per-session controllers. */
   private readonly writeBatchMaxDelayMs: number
 
@@ -721,6 +784,110 @@ export class PersistenceCoordinator<TornMarker = unknown> {
       state.materialized = true
       this.preparations.invalidate(session.id)
     })
+  }
+
+  /** Whether the composed backend can durably remove a stored session. */
+  get supportsDeletion(): boolean {
+    return this.backend.deleteStored !== undefined
+  }
+
+  /**
+   * Durably delete one stored session, refusing while any claim on the identity
+   * survives. Deleting an identity with no stored artifact succeeds: the
+   * postcondition is absence.
+   *
+   * Runs on the per-id chain, so it cannot interleave with that session's writes,
+   * and advances the id deletion generation BEFORE the chain is released — any
+   * capability admitted under the old generation is refused from that moment on,
+   * including a detached borrower that no pool query can see.
+   *
+   * The chain is not by itself a publication fence: {@link initFor} is
+   * synchronous and does not run on it. {@link deleting} covers the window the
+   * generation cannot.
+   * @param id - persisted session to remove.
+   * @param signal - optional cancellation, honored before the backend commits.
+   * @throws SessionDeleteConflictError while the identity is still claimed.
+   */
+  async delete(id: SessionId, signal?: AbortSignal): Promise<void> {
+    // Bound here rather than called through `.call` below: the presence check
+    // wants the method, and an unbound method reference is exactly the shape
+    // that loses `this` the first time someone forgets the receiver.
+    const deleteStored = this.backend.deleteStored?.bind(this.backend)
+    if (deleteStored === undefined) {
+      throw new Error(`${this.backend.name} does not support session deletion`)
+    }
+    signal?.throwIfAborted()
+    await this.serialize(id, async () => {
+      signal?.throwIfAborted()
+      // A live owner is a LIFECYCLE question, not a storage one: the frontend
+      // disposes it first. Deleting under a live writer would race its
+      // write-behind buffer straight back onto disk after the artifact went away.
+      if (this.states.get(id)?.owner !== undefined) {
+        throw new SessionDeleteConflictError(id, 'live')
+      }
+      if (this.retirements.has(id)) throw new SessionDeleteConflictError(id, 'retiring')
+      const blocker = this.preparations.deletionBlocker(id)
+      if (blocker !== undefined) throw new SessionDeleteConflictError(id, blocker)
+      // Close the admission window BEFORE the backend runs and hold it through
+      // the bookkeeping, so no publication can slip between commit and revocation.
+      this.deleting.add(id)
+      try {
+        await deleteStored(id, signal)
+        // Only a COMMITTED removal advances the generation. A rejected backend
+        // delete leaves every existing capability valid. Note what that does and
+        // does not promise: the coordinator guarantees it removed nothing from
+        // ITS bookkeeping, not that the backend left every byte on disk. A
+        // backend whose removal is not atomic — the JSONL one recursively rm's a
+        // directory — can fail partway, and nothing here reconstructs it.
+        this.deletions.set(id, this.deletionGenerationOf(id) + 1)
+        this.states.delete(id)
+        // Safe here and only here: deletionBlocker already established there is no
+        // pinned lease or reservation to orphan.
+        this.preparations.invalidate(id)
+      } finally {
+        // Reached on BOTH paths, so it asserts nothing about the generation -
+        // which advanced above only if the removal committed. All it does is
+        // reopen the admission window: this id is no longer mid-delete, and
+        // publication must be allowed to proceed against whichever generation
+        // now stands. Bookkeeping only; see above for what a partly-completed
+        // backend removal can leave behind on disk.
+        this.deleting.delete(id)
+      }
+    })
+  }
+
+  /** Current durable-deletion generation for one identity. */
+  private deletionGenerationOf(id: SessionId): number {
+    return this.deletions.get(id) ?? 0
+  }
+
+  /**
+   * Refuse a Session admitted under a superseded incarnation of its id.
+   *
+   * A Session this coordinator never admitted is unknown to the WeakMap and
+   * passes: a fresh explicit create is entitled to reuse a deleted id.
+   * @param session - Session about to be published or persisted.
+   */
+  private assertNotRevoked(session: Session): void {
+    const admitted = this.admittedGeneration.get(session)
+    if (admitted === undefined) return
+    const id = session.header.id
+    if (admitted === this.deletionGenerationOf(id)) return
+    throw new Error(`session "${id}" was deleted after this source was admitted; its log cannot be restored`)
+  }
+
+  /**
+   * Refuse admission while this identity's durable deletion is in flight.
+   *
+   * Not over-refusal of a genuinely new session: the backend removes the whole
+   * stored directory, so a fresh artifact created inside that window would be
+   * taken out from under its live owner. The window is one backend delete long
+   * and clears in {@link delete}'s `finally` whether it commits or fails.
+   * @param id - identity about to be bound to a live lifecycle.
+   */
+  private assertNotDeleting(id: SessionId): void {
+    if (!this.deleting.has(id)) return
+    throw new Error(`session "${id}" is being deleted; it cannot be published while that is in flight`)
   }
 
   private async createCore(storage: SessionStorageMetadata): Promise<void> {
@@ -1064,6 +1231,9 @@ export class PersistenceCoordinator<TornMarker = unknown> {
 
   /** Read, repair in memory, validate, and freeze one cold source once. */
   private async prepareCore(id: SessionId): Promise<PreparedSessionSource<TornMarker>> {
+    // Read the generation BEFORE the artifact: a delete committing during this
+    // read then leaves this source stale, rather than stamping it as current.
+    const deletionGeneration = this.deletionGenerationOf(id)
     const stored = await this.backend.loadStored(id)
     if (stored === undefined) throw new SessionPersistenceNotFoundError(id)
     try {
@@ -1090,9 +1260,11 @@ export class PersistenceCoordinator<TornMarker = unknown> {
         inheritedEventCount: session.inheritedEventCount,
         events: Object.freeze(balanced),
       })
+      this.admittedGeneration.set(session, deletionGeneration)
       return {
         inspection,
         session,
+        deletionGeneration,
         revision,
         sessionLength: session.seq,
         tornMarker,
@@ -1350,6 +1522,15 @@ export class PersistenceCoordinator<TornMarker = unknown> {
   private initFor(session: Session): LiveSessionState {
     const existing = this.live.get(session)
     if (existing) return existing
+    // Both halves of the publication fence, synchronously, before any state is
+    // bound. `announce()` turns a synchronous throw here into a publication veto
+    // with a paired disposal edge; an async rejection would be too late.
+    this.assertNotDeleting(session.header.id)
+    this.assertNotRevoked(session)
+    // Stamp every admitted lifecycle, not only the prepared ones. A session that
+    // reaches the fresh branch below is otherwise unstamped forever, and would
+    // read as new again if it were republished after its id was deleted.
+    this.admittedGeneration.set(session, this.deletionGenerationOf(session.header.id))
     const reservation = this.preparations.reservationFor(session)
     if (reservation !== undefined) {
       const restored = this.attachPrepared(session, reservation)
@@ -1426,6 +1607,12 @@ export class PersistenceCoordinator<TornMarker = unknown> {
    */
   private async onCreated(session: Session, seed: readonly SessionEvent[]): Promise<void> {
     const id = session.header.id
+    // Recheck here as well as at publication, and before EVERY adoption branch
+    // rather than only the absent-storage one. This work is queued on the id
+    // chain, so a delete can commit between publication being admitted and this
+    // running; each branch below either re-appends a seed or rebinds ownership,
+    // and none of them may do that under a superseded incarnation.
+    this.assertNotRevoked(session)
     const tracked = this.states.get(id)
     if (tracked !== undefined) {
       // case 1: already tracked.
@@ -1475,7 +1662,9 @@ export class PersistenceCoordinator<TornMarker = unknown> {
     }
 
     // case 4: a genuinely new session. Register its meta (lazy), then persist its
-    // seed (events present at creation time) once.
+    // seed (events present at creation time) once. Reaching here means the
+    // artifact resolved to nothing, which for an already-admitted session is
+    // exactly the resurrection shape — refused by the recheck at the top.
     const storage = sessionStorageMetadata(session)
     await this.createCore({
       meta: { ...storage.meta },

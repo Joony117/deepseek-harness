@@ -51,6 +51,28 @@ async function mount(root: string, compression?: JsonlCompression): Promise<Cont
   return ctx
 }
 
+/**
+ * Tamper with a real artifact's header line in place. The header is its own
+ * independently decodable first frame, so only that frame is decoded, edited
+ * and recompressed; every later frame is carried over byte-for-byte, which
+ * keeps the fixture a genuine backend-written log rather than a hand-rolled one.
+ */
+async function rewriteZstdHeader(
+  path: string,
+  update: (header: Record<string, unknown>) => void,
+): Promise<void> {
+  const buffer = await readFile(path)
+  const first = scanZstdFrames(buffer, 1).frames[0]
+  expect(first).toBeDefined()
+  const decoded = await decompressZstdFrame(buffer.subarray(first!.start, first!.end))
+  const header = JSON.parse(decoded.toString('utf8').split('\n')[0] as string) as Record<string, unknown>
+  update(header)
+  await writeFile(path, Buffer.concat([
+    await compressZstdFrame(`${JSON.stringify(header)}\n`),
+    buffer.subarray(first!.end),
+  ]))
+}
+
 async function decodeCompleteFrames(buffer: Buffer): Promise<Buffer> {
   const { frames, tornStart } = scanZstdFrames(buffer)
   expect(tornStart).toBeUndefined()
@@ -781,5 +803,91 @@ describe('JsonlSessionPersistence: encoding selection', () => {
     ].join('\n'))
     await expect(ctx.sessionPersistence.append(header.id, oneTurnLog())).rejects.toThrow(/uses \.jsonl/)
     expect((await readdir(sessionDir(root, header.cwd, header.id))).some(name => name.endsWith('.jsonl.zstd'))).toBe(false)
+  })
+})
+
+describe('JsonlSessionPersistence: Zstandard deletion', () => {
+  // `deleteStored` branches on compression to read the stored header, and the
+  // deployed harness runs the zstd side of that branch. Everything below is the
+  // raw-encoding delete coverage in jsonl.spec.ts re-pinned on the branch
+  // production actually takes.
+
+  it('deletes a materialized zstd session directory and removes it from listings', async () => {
+    const root = await freshRoot()
+    const ctx = await mount(root)
+    const header = meta('zstd-delete-materialized', '/work')
+    await ctx.sessionPersistence.create(header)
+    await ctx.sessionPersistence.append(header.id, oneTurnLog())
+    const dir = sessionDir(root, header.cwd, header.id)
+
+    await ctx.sessionPersistence.delete(header.id)
+
+    await expect(stat(dir)).rejects.toMatchObject({ code: 'ENOENT' })
+    expect((await ctx.sessionPersistence.list()).map(listed => listed.id)).not.toContain(header.id)
+  })
+
+  it('refuses deletion when the stored zstd header does not identify the requested session', async () => {
+    const root = await freshRoot()
+    const ctx = await mount(root)
+    const header = meta('zstd-delete-identity-a', '/same')
+    await ctx.sessionPersistence.create(header)
+    await ctx.sessionPersistence.append(header.id, oneTurnLog())
+    const path = logPath(root, header.cwd, header.id, 'zstd')
+    await rewriteZstdHeader(path, (line) => { line.id = 'zstd-delete-identity-b' })
+    const before = await readFile(path)
+
+    // The identity check has to survive the compressed read path too: the rm
+    // below it is unrecoverable, so a refusal must leave the bytes untouched.
+    await expect(ctx.sessionPersistence.delete(header.id))
+      .rejects.toThrow(/requested id "zstd-delete-identity-a" does not match header id "zstd-delete-identity-b"/)
+    expect(await readFile(path)).toEqual(before)
+  })
+
+  it('refuses deletion when the stored zstd header names another session but cannot be parsed', async () => {
+    const root = await freshRoot()
+    const ctx = await mount(root)
+    const header = meta('zstd-delete-unparseable-a', '/same')
+    await ctx.sessionPersistence.create(header)
+    await ctx.sessionPersistence.append(header.id, oneTurnLog())
+    const path = logPath(root, header.cwd, header.id, 'zstd')
+    // Names another session AND carries one invalid field that has nothing to
+    // do with identity. The whole line is rejected for the bad field, so the
+    // identity it states is never compared - "unparseable" must not read as
+    // "anonymous, therefore mine to remove".
+    await rewriteZstdHeader(path, (line) => {
+      line.id = 'zstd-delete-unparseable-b'
+      line.delegationDepth = -1
+    })
+    const before = await readFile(path)
+
+    await expect(ctx.sessionPersistence.delete(header.id)).rejects.toThrow(/cannot be parsed/)
+    expect(await readFile(path)).toEqual(before)
+  })
+
+  it('refuses deletion when the first zstd frame is present but truncated', async () => {
+    const root = await freshRoot()
+    const ctx = await mount(root)
+    const header = meta('zstd-delete-torn-frame', '/work')
+    await ctx.sessionPersistence.create(header)
+    await ctx.sessionPersistence.append(header.id, oneTurnLog())
+    const path = logPath(root, header.cwd, header.id, 'zstd')
+    // readFirstZstdLine answers undefined when no COMPLETE first frame is
+    // available, which is the same answer it gives for an empty file. Half a
+    // header frame still holds the bytes of an identity claim, so it must not
+    // be read as anonymous. Keep enough bytes that the file is plainly nonempty.
+    const whole = await readFile(path)
+    const first = scanZstdFrames(whole, 1).frames[0]
+    expect(first).toBeDefined()
+    // Cut INSIDE the header frame, not merely somewhere in the file: a cut past
+    // frame 0 leaves a complete, decodable header and the delete is then
+    // legitimately allowed.
+    const torn = whole.subarray(0, first!.end - 2)
+    await writeFile(path, torn)
+    expect(torn.length).toBeGreaterThan(0)
+    expect(scanZstdFrames(torn, 1).frames[0]).toBeUndefined()
+
+    await expect(ctx.sessionPersistence.delete(header.id)).rejects.toThrow(/cannot be parsed/)
+    expect(await readFile(path)).toEqual(torn)
+    await expect(stat(sessionDir(root, header.cwd, header.id))).resolves.toBeDefined()
   })
 })

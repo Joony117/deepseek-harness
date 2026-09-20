@@ -30,6 +30,8 @@ import type {
   SessionControlFrame,
   SessionCreateRequest,
   SessionCreateValue,
+  SessionDeleteRequest,
+  SessionDeleteValue,
   SessionFollowFrame,
   SessionFollowRequest,
   SessionForkRequest,
@@ -138,6 +140,12 @@ export class SessionController extends TypertRemoteService {
       ctx.emit('api-session/added', this.listState.summaryFor(session))
     })
     ctx.on('session/disposed', (session) => {
+      // A delete transaction owns this lifecycle's removal event. Disposal is a
+      // lifecycle transition, not proof the durable log is gone: emitting here
+      // would remove the row before the delete is known to have succeeded, and
+      // a failed delete would then have lied to every connected client. Every
+      // other disposal still publishes removal exactly as before.
+      if (this.agents.ownsRemoval(session)) return
       ctx.emit('api-session/removed', session.id)
     })
     ctx.on('agent/status', ({ agent, status }) => {
@@ -315,6 +323,19 @@ export class SessionController extends TypertRemoteService {
   @Remote('fork')
   fork(request: SessionForkRequest): Promise<SessionForkValue> {
     return this.commands.fork(request)
+  }
+
+  /**
+   * Durably delete one Session after releasing any lifecycle this Host owns.
+   * The client-facing row survives until the backend confirms absence: a
+   * refusal or a backend failure leaves it visible, with an error.
+   * @param request - Session identity to remove.
+   * @param signal - caller cancellation for the persistence delete.
+   * @returns acknowledgement that the durable artifact is gone.
+   */
+  @Remote('delete')
+  delete(request: SessionDeleteRequest, signal: AbortSignal): Promise<SessionDeleteValue> {
+    return this.commands.delete(request, signal)
   }
 
   /**

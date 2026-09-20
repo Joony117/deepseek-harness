@@ -1,7 +1,7 @@
 import { MessageId, createUserMessage, createMessage } from '@deepseek-ai/dsh-llm'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
-import { appendFile, mkdtemp, mkdir, rm, readFile, writeFile, readdir, stat, symlink } from 'node:fs/promises'
+import { appendFile, mkdtemp, mkdir, rm, readFile, rename, writeFile, readdir, stat, symlink } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import SessionStore, { SessionId, SessionLogOffset, SessionSeq } from '@deepseek-ai/dsh-session'
@@ -378,6 +378,154 @@ describe('JsonlSessionPersistence: durability and crash semantics', () => {
     preparation[Symbol.dispose]()
   })
 
+  // --- Backend deletion ------------------------------------------------------
+  // Carried from the rc.2 fork, where these three pinned JsonlSessionPersistence's
+  // own delete. At rc.1 the public verb routes through the coordinator, so each
+  // one now also states which layer answers it.
+
+  it('deletes a materialized session directory and removes it from listings', async () => {
+    const m = meta('delete-materialized', '/work')
+    await ctx.sessionPersistence.create(m)
+    await ctx.sessionPersistence.append(m.id, oneTurnLog())
+    const dir = sessionDir(root, m.cwd, m.id)
+
+    await ctx.sessionPersistence.delete(m.id)
+
+    // The artifact owns its directory, so the whole directory goes; the shared
+    // project directory above it must survive.
+    await expect(stat(dir)).rejects.toMatchObject({ code: 'ENOENT' })
+    expect((await stat(projectDir(root, m.cwd))).isDirectory()).toBe(true)
+    expect((await ctx.sessionPersistence.list()).map(header => header.id)).not.toContain(m.id)
+    expect((await ctx.sessionPersistence.listSnapshots()).map(s => s.header.id)).not.toContain(m.id)
+  })
+
+  it('refuses deletion when the stored header does not identify the requested session', async () => {
+    const m = meta('delete-identity-a', '/same')
+    await ctx.sessionPersistence.create(m)
+    await ctx.sessionPersistence.append(m.id, oneTurnLog())
+    const path = rawLogPath(root, m.cwd, m.id)
+    await rewriteHeader(path, (header) => { header.id = 'delete-identity-b' })
+    const before = await readFile(path)
+
+    // deleteStored resolves through the same findLog every read uses, so the
+    // identity check is inherited rather than restated - and a refusal must
+    // leave the artifact byte-identical, because an rm here is unrecoverable.
+    await expect(ctx.sessionPersistence.delete(m.id))
+      .rejects.toThrow(/requested id "delete-identity-a" does not match header id "delete-identity-b"/)
+    expect(await readFile(path)).toEqual(before)
+  })
+
+  it('refuses deletion when the stored header names another session but cannot be parsed', async () => {
+    const m = meta('delete-unparseable-a', '/same')
+    await ctx.sessionPersistence.create(m)
+    await ctx.sessionPersistence.append(m.id, oneTurnLog())
+    const path = rawLogPath(root, m.cwd, m.id)
+    // A header that plainly reads "another session" AND carries one invalid
+    // field that has nothing to do with identity. parseHeader rejects the whole
+    // line for the bad field, so the identity it states is never compared -
+    // "unparseable" must not be read as "anonymous, therefore mine to remove".
+    await rewriteHeader(path, (header) => {
+      header.id = 'delete-unparseable-b'
+      header.delegationDepth = -1
+    })
+    const before = await readFile(path)
+
+    await expect(ctx.sessionPersistence.delete(m.id)).rejects.toThrow(/cannot be parsed/)
+    expect(await readFile(path)).toEqual(before)
+  })
+
+  it('refuses deletion when a complete header naming another session lost its newline', async () => {
+    const m = meta('delete-torn-header-a', '/same')
+    await ctx.sessionPersistence.create(m)
+    await ctx.sessionPersistence.append(m.id, oneTurnLog())
+    const path = rawLogPath(root, m.cwd, m.id)
+    // The trap this pins: readFirstLine answers undefined at EOF-before-newline
+    // exactly as it does for an empty file, so a crash that lost the newline
+    // after a header naming ANOTHER session looks anonymous at that layer. Only
+    // an empty artifact is anonymous, and emptiness is a stat, not a read.
+    await writeFile(path, JSON.stringify({ ...meta('delete-torn-header-b', '/same') }))
+    const before = await readFile(path)
+    expect(before.length).toBeGreaterThan(0)
+    expect(before.includes(0x0a)).toBe(false)
+
+    await expect(ctx.sessionPersistence.delete(m.id)).rejects.toThrow(/cannot be parsed/)
+    expect(await readFile(path)).toEqual(before)
+    await expect(stat(sessionDir(root, m.cwd, m.id))).resolves.toBeDefined()
+  })
+
+  it('still deletes an artifact that has no header bytes at all', async () => {
+    // The other side of the same guard: nothing was written, so nothing names
+    // anybody, and refusing here would strand a directory nobody can remove.
+    const m = meta('delete-empty-artifact', '/work')
+    await mkdir(sessionDir(root, m.cwd, m.id), { recursive: true })
+    await writeFile(rawLogPath(root, m.cwd, m.id), '')
+
+    await ctx.sessionPersistence.delete(m.id)
+
+    await expect(stat(sessionDir(root, m.cwd, m.id))).rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
+  it('refuses to delete a session directory that is a link rather than a real directory', async () => {
+    // The header check proves who owns the BYTES. It cannot prove what the
+    // removal target IS: findLog opens THROUGH the directory and stat follows
+    // links, so a junction standing in its place satisfies every identity check
+    // - the log behind it genuinely belongs to this id. Measured here, rm
+    // unlinks the junction without descending, so the hazard is the false
+    // report rather than the target's contents: the link vanishes, the artifact
+    // survives, and the caller is told the log was permanently deleted.
+    const m = meta('delete-linked-dir', '/work')
+    await ctx.sessionPersistence.create(m)
+    await ctx.sessionPersistence.append(m.id, oneTurnLog())
+
+    const real = sessionDir(root, m.cwd, m.id)
+    const moved = join(root, 'moved-out-of-the-way')
+    await rename(real, moved)
+    await symlink(moved, real, process.platform === 'win32' ? 'junction' : 'dir')
+
+    await expect(ctx.sessionPersistence.delete(m.id))
+      .rejects.toThrow(/is a link rather than a real directory/)
+
+    // Both survive: the link was not unlinked, and the log behind it is intact.
+    expect((await stat(moved)).isDirectory()).toBe(true)
+    expect((await readFile(join(moved, 'session.jsonl'), 'utf8')).length).toBeGreaterThan(0)
+  })
+
+  it('queues a delete behind an in-flight append instead of racing it', async () => {
+    // The rc.2 fork REFUSED here, with "persistence work is pending". At rc.1 the
+    // public verb routes through the coordinator, whose per-id chain serializes
+    // the two instead: the artifact is untouched while the append is held, and
+    // the delete runs only after it lands. That is the stronger guarantee - no
+    // caller has to retry, and the ordering still cannot invert - so this pins
+    // the replacement rather than the refusal it replaced.
+    const m = meta('delete-pending', '/work')
+    await ctx.sessionPersistence.create(m)
+    await ctx.sessionPersistence.append(m.id, oneTurnLog())
+    const backend = ctx.sessionPersistence as JsonlSessionPersistence
+    const original = backend.appendBatch.bind(backend)
+    const started = Promise.withResolvers<undefined>()
+    const release = Promise.withResolvers<undefined>()
+    vi.spyOn(backend, 'appendBatch').mockImplementation(async (...args) => {
+      started.resolve(undefined)
+      await release.promise
+      await original(...args)
+    })
+    const pending = backend.append(m.id, [{
+      type: 'turn/start', seq: SessionSeq(oneTurnLog().length), time: 10, data: { turn: 2 },
+    }])
+    await started.promise
+
+    let settled = false
+    const deletion = backend.delete(m.id).then(() => { settled = true })
+    // Long enough for an unserialized delete to have finished its rm.
+    await new Promise(resolve => setTimeout(resolve, 50))
+    expect(settled).toBe(false)
+    expect((await stat(sessionDir(root, m.cwd, m.id))).isDirectory()).toBe(true)
+
+    release.resolve(undefined)
+    await pending
+    await deletion
+    await expect(stat(sessionDir(root, m.cwd, m.id))).rejects.toMatchObject({ code: 'ENOENT' })
+  })
   it('readRaw returns the stored artifact text verbatim with its original filename', async () => {
     const m = meta('raw-read', '/work')
     await ctx.sessionPersistence.create(m)

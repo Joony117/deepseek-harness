@@ -28,6 +28,7 @@ import type { HostObservable, PropsHooks, PropsLocale, PropsRenderSlots, PropsRu
 import type {} from '@deepseek-ai/dsh-client-ui-sidebar/client'
 import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type { SessionSearchResultItem } from '@deepseek-ai/dsh-api-session-controller/client'
+import type { SessionDeleteRefusal } from '@deepseek-ai/dsh-api-session-controller/types'
 import type { RemoteHostFacts } from '@deepseek-ai/dsh-api-remotes/client'
 import type { WorkspaceId, WorkspaceView } from '@deepseek-ai/dsh-api-workspace-controller/client'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
@@ -49,6 +50,21 @@ export interface DirectoryFlowOwnerProps {
   onCancel: () => void
   /** The interaction itself failed (chooser missing, listing denied); the owner shows its error surface. */
   onError: (message: string) => void
+}
+
+/**
+ * Why one delete attempt did not durably remove the Session. Carried as a
+ * resolved value rather than a rejection because a refusal is an expected
+ * answer, not a fault: the surviving row stays listed and shows this text.
+ * `reason` is the Host's refusal code where it gave one — its prose message
+ * is a single generic sentence for every refusal, so the code, not the
+ * message, is what distinguishes the conditions.
+ */
+export interface SessionDeleteFailure {
+  /** Host refusal code, or `unsupported` for a backend without deletion. Absent for a transport/backend failure. */
+  reason?: SessionDeleteRefusal | 'unsupported'
+  /** Diagnostic text; the fallback shown when no reason code is present. */
+  message: string
 }
 
 declare module '@deepseek-ai/dsh-client-ui-slots' {
@@ -134,6 +150,15 @@ export type WorkspaceBrowserInjected = {
    * session clears the selection into the New Session view state.
    */
   archiveSession: (sessionId: SessionId) => Promise<void>
+  /**
+   * Permanently remove one Session log from disk; this cannot be undone.
+   * Resolves with `undefined` only once the Host has confirmed durable
+   * absence, and with a {@link SessionDeleteFailure} for every refusal or
+   * backend failure. Removing the row is not this callback's job: the
+   * authoritative Host removal event drives the row away, so a refused
+   * target stays visible carrying its error.
+   */
+  deleteSession: (sessionId: SessionId) => Promise<SessionDeleteFailure | undefined>
   /**
    * Reorder a session inside its Workspace account (DOM-insertBefore
    * semantics: omitted anchor appends to the end). The view refreshes from

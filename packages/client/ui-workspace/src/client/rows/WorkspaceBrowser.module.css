@@ -34,8 +34,9 @@
   background: var(--dsw-alias-interactive-bg-hover);
 }
 
-/* Section header: title, an inline search control, and the two trailing
-   actions. Expanding search collapses the action cluster and takes its room. */
+/* Section header: title, an inline search control, and the trailing
+   view / bulk-delete / add actions. Expanding search collapses the action
+   cluster and takes its room. */
 .sectionHeader {
   flex: none;
   display: flex;
@@ -106,7 +107,9 @@
   display: flex;
   align-items: center;
   gap: 4px;
-  max-width: 60px;
+  /* Three 24px controls plus their gaps; the .headerActionsHidden collapse
+     therefore travels 92px, not 60px, in the same 180ms. */
+  max-width: 92px;
   opacity: 1;
   overflow: hidden;
   visibility: visible;
@@ -487,6 +490,56 @@
 .deleteStatus {
   font-size: 12px;
   line-height: 18px;
+  color: var(--dsw-alias-label-secondary);
+}
+
+/* Bulk-delete picker and confirmation body: one scrolling checklist whose
+   rows carry the exact display title over the opaque session id. */
+.bulkList {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 280px;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.bulkItem {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 0;
+  font-size: 13px;
+  line-height: 18px;
+  color: var(--dsw-alias-label-primary);
+}
+
+.bulkItem input {
+  flex: none;
+  margin-top: 2px;
+}
+
+.bulkMeta {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  gap: 2px;
+}
+
+.bulkId,
+.bulkStatus {
+  font-size: 12px;
+  line-height: 16px;
+  overflow-wrap: anywhere;
+}
+
+.bulkId {
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.bulkStatus {
   color: var(--dsw-alias-label-secondary);
 }
 

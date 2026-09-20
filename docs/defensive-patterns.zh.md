@@ -32,4 +32,4 @@
 
 ## 用 unlink 删除链接形态的路径
 
-可能是符号链接或 Windows junction 的路径，应先用 `lstatSync().isSymbolicLink()` 判断，再用 `unlinkSync` 删除：unlink 只删除链接本身并拒绝真实目录，因此绝不会跟随链接进入其目标。Windows 上对 junction 调用 `rmSync(link)` 会抛 `ERR_FS_EISDIR`；递归删除可能穿过 junction 进入其目标。真实目录才使用带 `recursive` 的 `rmSync`。
+可能是符号链接或 Windows junction 的路径，应先用 `lstatSync().isSymbolicLink()` 判断，再用 `unlinkSync` 删除：unlink 只删除链接本身并拒绝真实目录，因此绝不会跟随链接进入其目标。Windows 上对 junction 调用 `rmSync(link)` 会抛 `ERR_FS_EISDIR`；递归删除可能穿过 junction 进入其目标。真实目录才使用带 `recursive` 的 `rmSync`。 平台注意：在 Node 24.11.1/Windows 10 上两者均未复现——`rm` 只删除 junction 本身，目标完好——切勿依赖该异常。参见 `FORK.md` 的 “A link is not a directory”。

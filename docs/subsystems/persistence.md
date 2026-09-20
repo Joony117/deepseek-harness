@@ -413,6 +413,26 @@ abstract borrowSession(id: SessionId, signal?: AbortSignal): Promise<BorrowedSes
 abstract readFrom(id: SessionId, fromSeq: SessionLogOffset, signal?: AbortSignal): Promise<SessionEventSuffix>
 
 /**
+ * Durably remove one session and everything this backend keeps for it.
+ * Resolving means the artifact is gone.
+ *
+ * Removing an identity with no stored artifact SUCCEEDS: the postcondition is
+ * absence, so retrying a partially-applied delete can reach a clean end state.
+ * Callers test {@link supportsDeletion} first.
+ *
+ * Implementations MUST refuse while the identity is still claimed — a live
+ * owner, a draining disposal, or an outstanding unpublished preparation — and
+ * MUST ensure no capability admitted before the deletion can afterwards
+ * republish the identity or recreate its log. A fresh explicit create MAY
+ * reuse the id as a new incarnation; deletion retires one incarnation, not the
+ * name.
+ * @param _id - the persisted session to remove.
+ * @param signal - optional cancellation for backend delete work.
+ * @throws when this backend does not support deletion.
+ */
+delete(_id: SessionId, signal?: AbortSignal): Promise<void>
+
+/**
  * Lightweight listing from metadata, without a full-log parse.
  * @param signal - optional cancellation for backend listing work.
  * @returns one header per materialized session.
