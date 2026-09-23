@@ -20,6 +20,7 @@ import { SessionDeleteConflictError } from '@deepseek-ai/dsh-session-persistence
 import type { RemoteFailure } from '@deepseek-ai/dsh-typert-protocol'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
+  createSessionTestController,
   createSessionTestRemote,
   installSessionReadTestServices,
   testSessionPersistence,
@@ -43,6 +44,8 @@ interface DurableStore {
   failDelete: (() => unknown) | undefined
   /** Optional hold inside the durable delete, so a second call can overlap the first. */
   holdDelete: (() => Promise<void>) | undefined
+  /** Optional hold inside the stored-session listing, so a resume can stay in flight. */
+  holdList: (() => Promise<void>) | undefined
 }
 
 interface Bench {
@@ -132,6 +135,30 @@ function disposeRejectsFactory(ctx: Context, teardowns: Map<SessionId, () => voi
   }
 }
 
+/**
+ * Factory whose `createAgent` waits on a test-owned gate, so a create can be
+ * admitted and still in flight when a deletion raises its fence.
+ * @param ctx - the harness root context.
+ * @param entered - resolved when a create reaches the factory.
+ * @param gate - the create finishes only after this settles.
+ * @returns the factory installed with `ctx.agents.setFactory`.
+ */
+function gatedCreateFactory(
+  ctx: Context,
+  entered: PromiseWithResolvers<undefined>,
+  gate: Promise<undefined>,
+): AgentFactory {
+  const base = liveFactory(ctx)
+  return {
+    ...base,
+    createAgent: async (ownerCtx: Context, options: CreateAgentOptions): Promise<AgentHandle> => {
+      entered.resolve(undefined)
+      await gate
+      return base.createAgent(ownerCtx, options)
+    },
+  }
+}
+
 async function bench(options: {
   supportsDeletion?: boolean
   factory?: (ctx: Context) => AgentFactory
@@ -146,10 +173,13 @@ async function bench(options: {
     saveSelection: () => Promise.resolve(),
   } as never)
   const durable: DurableStore = {
-    artifacts: new Set(), deletes: [], failDelete: undefined, holdDelete: undefined,
+    artifacts: new Set(), deletes: [], failDelete: undefined, holdDelete: undefined, holdList: undefined,
   }
   ctx.provide('sessionPersistence', testSessionPersistence(ctx, {
-    list: () => Promise.resolve([]),
+    list: async () => {
+      await durable.holdList?.()
+      return []
+    },
     inspect: () => Promise.resolve(undefined),
     supportsDeletion: options.supportsDeletion ?? true,
     delete: async (sessionId: SessionId, signal?: AbortSignal) => {
@@ -382,6 +412,49 @@ describe('sessions.delete owns its fence and its marks', () => {
 
     expect(settled.ok).toBe(true)
     expect([...b.durable.artifacts]).toEqual([])
+    expect(b.removed).toEqual([sessionId])
+  })
+
+  it('awaits BOTH a resume and a create admitted before the fence', async () => {
+    const createEntered = Promise.withResolvers<undefined>()
+    const createGate = Promise.withResolvers<undefined>()
+    const b = await bench({ factory: ctx => gatedCreateFactory(ctx, createEntered, createGate.promise) })
+    const sessionId = SessionId('racing-activation')
+    const controller = createSessionTestController(b.ctx, {
+      defaultModelSelection: () => ({ provider: 'fixture', model: 'fixture-model' }),
+      cwd: CWD,
+    })
+    // Only the resume's stored-session lookup is held; the create's own
+    // identity check, which comes second, passes straight through.
+    const lookupEntered = Promise.withResolvers<undefined>()
+    const lookupGate = Promise.withResolvers<undefined>()
+    b.durable.holdList = () => {
+      b.durable.holdList = undefined
+      lookupEntered.resolve(undefined)
+      return lookupGate.promise
+    }
+
+    // Both activations are admitted before the fence, and both are in flight.
+    const resumed = controller.resolveAgent(sessionId)
+    await lookupEntered.promise
+    const created = b.remote.create({ cwd: CWD, sessionId })
+    await createEntered.promise
+
+    const deleted = b.remote.delete({ sessionId })
+    // Settle the resume only. The create is still in flight, so the deletion
+    // must not have reached the backend yet.
+    lookupGate.resolve(undefined)
+    await resumed
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(b.durable.deletes).toEqual([])
+
+    createGate.resolve(undefined)
+    expect((await created).ok).toBe(true)
+    expect((await deleted).ok).toBe(true)
+    // The create finished before the removal, so the deletion disposed it; no
+    // lifecycle outlives the durable delete.
+    expect(b.durable.deletes).toEqual([sessionId])
+    expect(b.ctx.agents.get(sessionId)).toBeUndefined()
     expect(b.removed).toEqual([sessionId])
   })
 

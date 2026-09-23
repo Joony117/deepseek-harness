@@ -126,9 +126,17 @@ guards beyond a fork reviewer's scope. They are ours, and ours to keep correct:
   read handle or a historical migration decode refuses with `loading`.
   The rc.1 guarantee "a delete during an in-flight append is *queued behind it*"
   no longer holds at this layer. The waiting moved up one layer, to the controller:
-  `session-controller/src/commands.ts` `delete` raises the deletion fence and awaits an
-  in-flight resume or create (`beginDeletion`), refuses a `running` Agent, and disposes
-  an idle one it owns before it calls the backend. Disposal awaits the write handle's
+  `session-controller/src/commands.ts` `delete` raises the deletion fence, then awaits
+  every resume AND every create registered for the id when the fence went up - both,
+  when both are pending (`beginDeletion`, `Promise.allSettled`, so a failed activation
+  does not end the wait early). `resolve` and `ensureSession` check the fence and
+  register their activation in one synchronous prologue, so an activation is either
+  registered before the fence and awaited, or refused as busy. Nothing else is awaited:
+  a turn on a live Agent is refused as `running`, not waited for. The port at
+  `535c39f919` awaited only one (`resumes.get(id) ?? creations.get(id)`); the host spec
+  "awaits BOTH a resume and a create admitted before the fence" fails on that form. The
+  delete then refuses a `running` Agent and disposes an idle one it owns before it calls
+  the backend. Disposal awaits the write handle's
   `close()`, which completes pending durability and releases the claim, so an idle
   session's last append lands before the delete starts. A claim that survives anyway
   reaches the client as `persistence-conflict`.
@@ -151,7 +159,8 @@ guards beyond a fork reviewer's scope. They are ours, and ours to keep correct:
   - **"No first line" is not "no bytes".** `readFirstLine` answers `undefined`
     at EOF-before-newline, and `readFirstZstdLine` answers `undefined` when no
     COMPLETE first frame is available - the same answer each gives for an empty
-    file. Emptiness is decided by `stat`: an `undefined` header on a non-empty file
+    file. Emptiness is decided by the entry's own `lstat` size (the regular-file check
+    below takes it before the header read): an `undefined` header on a non-empty file
     refuses with `unidentifiableHeader`, or a header naming another session that
     merely lost its newline to a crash would read as anonymous.
   - **A link is not a directory.** `findLog` opens THROUGH `<project>/<encoded id>`
@@ -184,6 +193,19 @@ guards beyond a fork reviewer's scope. They are ours, and ours to keep correct:
     used that as the reason to leave it alone; that was wrong. It is also this tree's
     ACTIVE documentation, and a maintainer reads the rule rather than this file, so a
     measured-false mechanism had to be corrected where it is read.
+  - **A generation must be a regular file.** The directory `lstat` does not cover the
+    files inside it: a symlink named `session.v3.jsonl` passes the filename match, and
+    `readGenerationHeader` reads THROUGH it, so a link to another root's log for the same
+    id passes the header check too. `rm` then unlinks the link, not its target (measured,
+    Node 24.11.1), and the delete reports a durable removal for a log still on disk -
+    the same false report as the junction above. `deletableGenerations` `lstat`s each canonical generation before
+    it reads the header and refuses anything that is not a regular file with
+    `irregularGeneration`. `delete.spec.ts` "refuses a generation file that is a link,
+    before reading through it" resolves (deletes the link, reports success) with the
+    check removed and refuses with it; it skips itself where the process cannot create a
+    file symlink. Bound: the check and the removal are separate calls, so an entry
+    swapped for a link between them is not caught; the write lease keeps this harness
+    out of that window, not another tool.
 - **The Host owns row removal for the lifecycles a delete transaction claims, and only
   those.** For a claimed lifecycle `session/disposed` stops publishing
   `api-session/removed` and the delete publishes it itself, once the backend confirms
@@ -363,24 +385,126 @@ corepack pnpm exec vitest run packages/api/session-controller/tests packages/ses
 Use explicit `.../tests` paths: a bare `packages/session/session-persistence`
 filter substring-matches every sibling package whose name starts with it.
 
-**4. Full test, compared to pristine by identity.** Run `corepack pnpm run test` in both
-`$S/harness` and `$S/pristine` (install + build pristine too). Compare failing tests by
-file + test name + failure signature, never by count. A new failing identity blocks.
-A test that fails in only one tree gets three solo reruns in each before it is called
-load-sensitive. Record the new baseline in the section below.
-
-**5. W config load, both trees:**
+**4. Full test, compared to pristine by identity.** Install and build pristine too, then
+run the suite in both trees with the JSON reporter, so failures are diffed by identity and
+signature rather than read off a count:
 
 ```sh
-LOCAL_QWEN_API_KEY=local node $S/harness/apps/cli/lib/bin.js --profile web --patch E:/Qwen3.8_27b/deepseek-harness.yml --dump-config
+for t in harness pristine; do
+  (cd $S/$t && corepack pnpm run build:native-system && corepack pnpm exec vitest run \
+    --reporter=default --reporter=json --outputFile.json=$S/logs/test-$t.json > $S/logs/test-$t.log 2>&1)
+done
 ```
 
-**6. Swap into live F** (a separate owner go; restarting the harness kills in-flight campaigns).
-- Back up `~/.dsh` first. Session formats move forward on upgrade, and an older fork
-  cannot read turns written by a newer one.
-- Stop the harness on 3080, point live F's `codex/harness` at the rebased commit (fetch
-  from staging, then `git checkout -B codex/harness <sha>` in a clean live F), reinstall,
-  and rebuild. Then run the checks in the cutover section below.
+Each of these blocks until it is explained or bounded:
+- a failing identity (file + test name) that the pristine run does not have;
+- a changed failure signature on an identity that fails in both trees;
+- any unhandled error in the fork's run: vitest's `Errors  N error` summary line,
+  `Worker exited unexpectedly`, `EAGAIN`, or `Some tests are still running when generating
+  the JSON report`. A crashed worker also hides the tests it had not finished; they sit as
+  `pending` in the JSON, so rerun their file alone.
+
+"Explained" means shown in pristine with the same signature, or traced to a named cause.
+"Bounded" means measured: runs, rate, duration. "Load" without numbers is neither. A test
+that fails in only one tree gets three solo reruns AND three full runs per tree before it
+is called load-sensitive, because a solo run cannot recreate the full run's load. Record
+the new baseline in the section below.
+
+**5. W config load, both trees.** Each must exit 0. Diff the two dumps; every difference
+must be one of the fork's own changes.
+
+```sh
+LOCAL_QWEN_API_KEY=local node $S/harness/apps/cli/lib/bin.js --profile web --patch E:/Qwen3.8_27b/deepseek-harness.yml --dump-config > $S/logs/dump-harness.yml
+LOCAL_QWEN_API_KEY=local node $S/pristine/apps/cli/lib/bin.js --profile web --patch E:/Qwen3.8_27b/deepseek-harness.yml --dump-config > $S/logs/dump-pristine.yml
+```
+
+**6. Pre-swap checks.** All keyless: no model turn, no credentials loaded, never port 3080.
+6a and 6b touch staging only. 6c and 6d read a backup of `~/.dsh`, which holds session
+content and credentials, so they wait for the owner's go, and the owner takes the backup.
+The three scripts were written for lq-a5y; `T` is where they live. Re-read a script
+before running it: it is code, and it runs with your rights.
+
+```sh
+T=E:/staging-lq-a5y/logs    # w-imports-check.mjs, keyless-boot.ps1, migrate-dry-run.mjs
+```
+
+- **6a. W's imports resolve in the new tree.** W's plugins import F's built `lib/` by
+  relative path (`../../deepseek-harness/packages/...`), so after the swap they bind to
+  whatever the new tree built. The script reads every non-test `.mjs` under W's
+  `plugins/`, imports each F target from the tree named, and checks every name. It must
+  end `ALL PRESENT`.
+
+  ```sh
+  node $T/w-imports-check.mjs $S/harness
+  ```
+
+- **6b. Keyless boot of the new tree with W's plugins.** The launcher is not usable here:
+  it runs learning-rescue and probes 8080. The script boots `bin.js --profile web` with
+  W's yml plus an overlay that disables the two keyed entries (`mcp-brave-search`,
+  `llm-subscriptions`), in a scratch `DSH_HOME`/`HOME`/`USERPROFILE` (the supervisor
+  writes under `os.homedir()`), with `DSH_TELEMETRY_MODE=DISABLED`, on `--port 0`.
+  `-MirrorPlugins` matters: without it W's plugins, where they sit, still import LIVE F's
+  `lib/`, so the boot would test a mix of trees. The mirror copies W's plugins beside a
+  junction named `deepseek-harness` that points at the new tree, plus the four
+  `.agent-results/lq-4cq` code files that `plugins/learning/engine-worker.mjs` imports or
+  reads (`untrusted-call.mjs`, `untrusted-launcher.mjs`, `untrusted-runner.mjs`,
+  `untrusted-launch-helper.cs`); 6a cannot see that import, only the boot does. Pass is a
+  fresh learning-supervisor heartbeat whose `runtimeBin` is inside the new tree: the
+  supervisor writes it only after the loader has settled the whole entry tree and the
+  WebServer listens. `engine: unloaded` and `selfCheck: false` are expected: W's yml does
+  not set `secureMutableEngine`. The script then stops the process tree it started, and
+  nothing else. Use a new, empty `-ScratchHome` each time.
+
+  ```sh
+  pwsh -File $T/keyless-boot.ps1 -Tree $S/harness -ScratchHome $S/boot-home -MirrorPlugins
+  ```
+
+  Not exactly the launcher's boot: the two keyed entries are off, the plugins are a
+  copy, and telemetry is off. lq-a5y repair 1 ran it: pass, 0 stderr lines
+  (`E:/staging-lq-a5y/logs/repair1-keyless-boot.txt`).
+
+- **6c. Back up `~/.dsh`, then prove the rollback** (owner go). Stop the harness on 3080
+  first: it keeps writing sessions, and a copy taken mid-write can hold a torn tail. Then
+  restore the backup into a scratch home and boot the OLD tree against it. No mirror
+  here: W's imports already point at the old tree. `--force-local` stops tar reading
+  `E:` as a remote host.
+
+  ```sh
+  B=$S/backups/dsh-runtime-$(date +%Y%m%d)-pre.tar.gz
+  mkdir -p $S/backups $S/rollback-home
+  tar --force-local -czf $B -C "$USERPROFILE" .dsh
+  tar --force-local -xzf $B -C $S/rollback-home
+  pwsh -File $T/keyless-boot.ps1 -Tree E:/deepseek-harness -ScratchHome $S/rollback-home
+  ```
+
+  `$S/rollback-home` holds a copy of the credentials: delete it once the boot passes.
+
+- **6d. Session migration dry run on a copy** (owner go). A write open migrates a stored
+  session (it publishes a successor generation), so the script opens every listed session
+  in the copy for write with the NEW tree's backend and closes it. It prints counts only:
+  `directories`, `listed`, `migrated`, `alreadyCurrent`, `refused` by error class, never
+  ids, paths or content. It refuses a root inside a live DSH home. Pass is an empty
+  `refused` and `listed` equal to `directories`; anything else is the owner's call before
+  the swap, because a session refused here is one the new tree will not open.
+
+  ```sh
+  mkdir -p $S/migrate-copy
+  tar --force-local -xzf $B -C $S/migrate-copy .dsh/sessions
+  node $T/migrate-dry-run.mjs $S/harness $S/migrate-copy/.dsh/sessions
+  ```
+
+  Known limits, measured on synthetic roots: a root in the other compression refuses as a
+  whole (`fatal`, with a hint); so does a zstd log whose first frame holds more than the
+  header line; and a log whose header does not parse is skipped by `list`, so it shows
+  only as `directories` minus `listed`. Delete `$S/migrate-copy` afterwards.
+
+**7. Swap into live F** (a separate owner go; restarting the harness kills in-flight campaigns).
+- The 6c backup is the swap's backup, and the harness is still stopped from 6c. If it ran
+  again since, take a new backup. Session formats move forward on upgrade, and an older
+  fork cannot read turns written by a newer one.
+- Point live F's `codex/harness` at the rebased commit (fetch from staging, then
+  `git checkout -B codex/harness <sha>` in a clean live F), reinstall, and rebuild. Then
+  run the checks in the cutover section below.
 - Update the rows at the top of this file: Fork base, Previous base, rollback.
 - In W: `details.md` / `tasks.md` / `change_log.md` F rows, and any test fixture that
   names the old branch.
@@ -388,20 +512,40 @@ LOCAL_QWEN_API_KEY=local node $S/harness/apps/cli/lib/bin.js --profile web --pat
 
 ## Known environmental failures on this machine — not regressions
 
-**rc.3 baseline (lq-a5y, 2026-09-22).** Compare by test identity and failure signature,
-never by count. Plain `dsh-v0.1.5-rc.3` on this box (`E:/staging-lq-a5y/rc3-pristine`)
-fails 11; the fork fails 9, all 9 with the same signature as plain rc.3 except the pwsh case
-noted below. Shared, environmental, not the fork's: `pdf-license-bundle` (tar cannot resolve
-`C:`), `fs-sandbox` ×2 (symlinked-out create resolves), `native-windows` "preserves
-missing-target…", `spawn-runner` "resolves Windows executables…", `build-exe-for-python-sdk`
-×2 (quoted node path, see below), `benchmark-npm-resolution` (5,000 ms timeouts; one to three
-of its cases per run, in both trees). `tool-pwsh-persistent` `loader-composition` "preserves cwd and
-environment across calls" fails on plain rc.3 every time (end marker leaks, or 120 s timeout)
-and passes on the fork 3/3 alone: the fork's padded-status fix is what makes it pass. It timed
-out once in a loaded fork full run, with a vitest `write EAGAIN`. `lsp-stdio` "resolves the cancel
-grace…" timed out once under load and passes 3/3 alone in both trees. Evidence:
-`E:/staging-lq-a5y/logs/` (`pristine-test.log`, `harness-test.log`, `pwsh-loader-rerun.txt`,
-`lsp-rerun.txt`, `newfail-rerun.txt`).
+**rc.3 baseline (lq-a5y, 2026-09-22, re-measured in repair 1).** Compare by test identity and
+failure signature, never by count. Three full `vitest run` passes per tree, fork
+(`E:/staging-lq-a5y/harness`) and plain `dsh-v0.1.5-rc.3` (`E:/staging-lq-a5y/rc3-pristine`),
+plus solo reruns:
+
+- **Shared, same signature in all six runs, not the fork's:** `build-exe-for-python-sdk` ×2
+  (quoted node path, see below), `pdf-license-bundle` (`npm_execpath is required`),
+  `native-windows` "preserves missing-target…", `spawn-runner` "resolves Windows
+  executables…", `fs-sandbox` ×2 (a create under a symlinked-out directory resolves). The
+  last two are NOT a missing privilege: this box can create symlinks, so `fs-sandbox` is
+  upstream containment behaviour on Windows. Flagged, not fixed here.
+- **`tool-pwsh-persistent` `loader-composition` "preserves cwd and environment across
+  calls": MEASURED.** Plain rc.3 fails it every time: 3/3 full, 3/3 solo, all at the 120 s
+  bound. The fork's padded-status fix makes it pass: 3/3 solo at 8.6 s. Under the full
+  run's load it takes 64.6 s and 67.8 s, and once 120.3 s, a timeout. So the fork's
+  failure is a 7-8× load slowdown that crosses the 120 s bound about one full run in
+  three.
+- **Pristine only, 5,000 ms timeouts, one run in three each:** `benchmark-npm-resolution`,
+  `oxlint-contract`. The fork: 0/3.
+- **`Worker exited unexpectedly`: UNRESOLVED, bounded, shared.** Fork 1/3 full runs,
+  plain rc.3 2/3, each time with vitest's `Errors  1 error` line; the tests it leaves
+  `pending` in the JSON are always in a `session-persistence-jsonl` spec. `content-admission.spec.ts` alone crashes the same
+  way: fork 4/10, plain rc.3 5/10. No exit code is printed and Windows logs no event.
+  The tests a crash cuts off pass when rerun alone (`multi-edge-publication` 3/3 in both
+  trees).
+- **`write EAGAIN`: UNRESOLVED, bounded.** Seen once, in the first fork full run of the
+  port. 0 in the six repair runs.
+- `lsp-stdio` "resolves the cancel grace…" timed out once in the port's first run and
+  passes 3/3 alone in both trees. 0 in the six repair runs.
+
+Evidence in `E:/staging-lq-a5y/logs/`: `repair1-load-{harness,rc3-pristine}-{1,2,3}.{json,log}`,
+`repair1-solo.txt`, `repair1-crash-loop.txt`, `repair1-crash-*.log`; from the port run,
+`pristine-test.log`, `harness-test.log`, `pwsh-loader-rerun.txt`, `lsp-rerun.txt`,
+`newfail-rerun.txt`.
 
 The rc.1 record below is kept as history.
 

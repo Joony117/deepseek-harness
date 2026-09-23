@@ -570,12 +570,16 @@ class JsonlSessionPersistence extends SessionPersistence {
       const version = parseGenerationLogFilename(name, this.compression)
       if (version === undefined) continue
       const path = join(dir, name)
+      // Checked before the header is read: a link would have the header read
+      // follow it out of the root, so its bytes prove nothing about this entry.
+      const entry = await lstat(path)
+      if (!entry.isFile()) throw this.irregularGeneration(path)
       // Throws for a header naming another id or path, or a format this build cannot read.
       const header = await this.readGenerationHeader({ sourcePath: path, sourceVersion: version, currentPath: path }, id, signal)
       // `undefined` is NOT "no header bytes": it also means no complete first
       // line (a torn header naming another session looks exactly like an empty
       // file) or bytes that do not parse. Only a zero-byte file claims nobody.
-      if (header === undefined && (await stat(path)).size > 0) throw this.unidentifiableHeader(path)
+      if (header === undefined && entry.size > 0) throw this.unidentifiableHeader(path)
       generations.push({ path, version })
     }
     return generations.sort((left, right) => left.version - right.version).map(generation => generation.path)
@@ -1686,6 +1690,14 @@ class JsonlSessionPersistence extends SessionPersistence {
     return new Error(
       `session artifact ${JSON.stringify(path)} has a header line that cannot be parsed, `
       + 'so deletion cannot prove which session owns it; '
+      + 'inspect or move the artifact by hand instead of deleting it',
+    )
+  }
+
+  private irregularGeneration(path: string): Error {
+    return new Error(
+      `session artifact ${JSON.stringify(path)} is not a regular file, `
+      + 'so its header cannot prove which session owns it; '
       + 'inspect or move the artifact by hand instead of deleting it',
     )
   }

@@ -460,8 +460,11 @@ export class ApiSessionAgentController {
   async beginDeletion(sessionId: SessionId): Promise<void> {
     if (this.deletions.has(sessionId)) throw apiSessionDeleteUnavailable(sessionId, 'deleting')
     this.deletions.add(sessionId)
-    const pending = this.resumes.get(sessionId) ?? this.creations.get(sessionId)
-    if (pending !== undefined) await pending.then(() => undefined, () => undefined)
+    // A resume and a create are registered separately and can both be in
+    // flight for one id; either could publish a lifecycle after the removal.
+    const pending = [this.resumes.get(sessionId), this.creations.get(sessionId)]
+      .filter(activation => activation !== undefined)
+    if (pending.length > 0) await Promise.allSettled(pending)
   }
 
   /**

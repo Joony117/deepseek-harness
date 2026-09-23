@@ -323,6 +323,30 @@ describe('JSONL durable session deletion', () => {
     expect((await readdir(moved)).length).toBeGreaterThan(0)
   })
 
+  it('refuses a generation file that is a link, before reading through it', async (context) => {
+    const root = await freshRoot()
+    const persistence = await mount(root)
+    const header = meta('delete-linked-generation', '/work')
+    await store(persistence, header)
+    const current = logPath(root, header.cwd, header.id, 'none')
+    // The target sits outside the root and its header really names this id,
+    // so only the entry's own shape can refuse it.
+    const outside = join(await freshRoot(), 'elsewhere.jsonl')
+    await rename(current, outside)
+    try {
+      await symlink(outside, current, 'file')
+    } catch (error: unknown) {
+      // Windows without the symlink privilege cannot make the fixture.
+      if ((error as NodeJS.ErrnoException).code === 'EPERM') return context.skip()
+      throw error
+    }
+
+    await expect(persistence.delete(header.id)).rejects.toThrow(/is not a regular file/)
+
+    expect((await stat(outside)).isFile()).toBe(true)
+    expect((await readdir(dirname(current))).length).toBeGreaterThan(0)
+  })
+
   it('removes every generation, the current one last', async () => {
     const root = await freshRoot()
     const persistence = await mount(root)
