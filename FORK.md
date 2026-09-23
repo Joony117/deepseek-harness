@@ -5,9 +5,9 @@ not exist upstream, and `origin` is the **real upstream repository**.
 
 | Fact | Value |
 |---|---|
-| Working branch | `codex/harness-0.1.2-rc.1` — all local work lives here |
-| Fork base | tag `dsh-v0.1.2-rc.1` (`a66e4702047846cdaa10c66c9d3df3951f5ea70d`) |
-| Previous base | tag `dsh-v0.1.1-rc.2` (`b150a551b8`), branch `delete-session` — 1,735 commits behind this one |
+| Working branch | `codex/harness` — all local work lives here |
+| Fork base | tag `dsh-v0.1.5-rc.3` (`a4c74a91e06b00fe0b0937bde982170c526cc842`) |
+| Previous base | tag `dsh-v0.1.2-rc.1` (`a66e4702047846cdaa10c66c9d3df3951f5ea70d`), branch `codex/harness-0.1.2-rc.1`; before that `dsh-v0.1.1-rc.2` (`b150a551b8`), branch `delete-session` |
 | Rollback (whole tree) | `E:\deepseek-harness.rollback-lq-0ha` — the entire pre-cutover directory, renamed aside by `cutover.sh` |
 | Rollback (git ref) | `E:\staging-lq-0ha\old-state`, branch `oldbase` (`7cfca19b5f`) — live F's commits **and** its dirty tree, captured before any change |
 | Runtime snapshot | `E:\staging-lq-0ha\backups\dsh-runtime-20260910-pre.tar.gz` — `~/.dsh` as it was pre-cutover |
@@ -23,7 +23,7 @@ not exist upstream, and `origin` is the **real upstream repository**.
    Backups go to `fork` (`Joony117/deepseek-harness`, created 2026-08-25,
    tracker lq-3s0); never open an upstream PR without a Bead authorizing it.
 2. **Never commit on `master`.** It tracks `origin/master` and must stay a clean
-   mirror so rebases have a truthful base. Work goes on `codex/harness-0.1.2-rc.1`.
+   mirror so rebases have a truthful base. Work goes on `codex/harness`.
 3. **Never `reset --hard`, `clean -fd`, or `checkout .`** without asking. The
    built output (`apps/cli/lib/`, `packages/*/lib/`) is gitignored but is what
    the launcher actually runs; blowing it away silently breaks the user's
@@ -85,6 +85,11 @@ not exist upstream, and `origin` is the **real upstream repository**.
    already cleared to *set*. Any other growth is upstream prose that upstream’s own budget
    was sized for, and needs its own reason.
 
+6. **Commit fork work; never carry it as a dirty tree.** Every fork change lands as a
+   commit on `codex/harness` before the session that made it ends. The rc.1 fork kept 69
+   files uncommitted after the rc.1 cutover, so the rc.3 rebase first had to capture them by hand
+   in a staging clone. A dirty tree also defeats `backup/*` branches and the `fork` push.
+
 ## What moved at rc.1 — read this before looking for the old files
 
 The rc.2 fork's session-delete feature lived in `packages/host/apiproxy`. That
@@ -104,35 +109,51 @@ ported file-for-file. The map:
 | `permissionPresets.current(events)` | `permissionPresets.current(session)` — takes a Session now |
 
 Three mechanisms the delete feature leans on, worth knowing before you change it.
-**Two are rc.1's. The middle one is entirely ours** - `deleteStored` does not exist
-at the tag (`git show dsh-v0.1.2-rc.1:packages/session/session-persistence-jsonl/src/index.ts`
-contains no `deleteStored`), and neither does `supportsDeletion` on the coordinator's
-backend interface. An earlier revision of this file called all three "rc.1 mechanisms",
-which quietly placed our own guard beyond a fork reviewer's scope. It is ours, and ours
-to keep correct:
+**At rc.3 all three are ours.** rc.3 has no deletion on the persistence seam at all:
+`git show dsh-v0.1.5-rc.3:packages/session/session-persistence/src/index.ts` has no
+`delete` and no `supportsDeletion`, and `session-persistence-jsonl` has no `delete`.
+At rc.1 the admission layer was upstream's coordinator; rc.3 removed that coordinator in
+favour of a per-backend single-writer claim, so the delete's admission is now ours too.
+An earlier revision of this file called two of the three upstream's, which placed our own
+guards beyond a fork reviewer's scope. They are ours, and ours to keep correct:
 
-- **The coordinator owns admission, not the backend.** `session-persistence`'s
-  coordinator serializes per-id work and fences publication across a delete.
-  A delete requested during an in-flight append is *queued behind it*, not
-  refused — the rc.2 backend refused with "persistence work is pending", and
-  that refusal is gone on purpose.
-- **`deleteStored` verifies the stored header before it removes anything.**
-  `findLog` matches on the encoded id in the directory name and never opens the
-  file, so without that check a corrupted artifact whose header names a
-  different session would be `rm -rf`'d under the requested id. Every other
-  refusal in this backend is retryable; a recursive rm is not. Two traps cost a
-  data-loss defect each, so do not simplify this guard:
-  - **"Unparseable" is not "anonymous".** `parseHeaderMeta` rejects a whole
-    header line for a field that carries no identity at all (a negative
-    `delegationDepth`, an unknown `origin`), so a header that plainly reads
-    `"id":"other"` can still fail to parse. It can also THROW rather than answer
-    undefined - a foreign format version, a retired policy field - and that
-    rejection has to be allowed to propagate.
+- **Admission is the single-writer claim, and a held claim is a refusal, not a queue.**
+  rc.3's `JsonlBackendTracker.claimWrite` gives each id one writer. The JSONL `delete`
+  holds that claim for the whole removal, so no `create` or write `open` can
+  materialize the id mid-delete, and only a write handle can publish bytes. If the
+  claim is already held (a live handle, a create still constructing, another process's
+  kernel lease) the delete refuses with `SessionDeleteConflictError` `live`; an open
+  read handle or a historical migration decode refuses with `loading`.
+  The rc.1 guarantee "a delete during an in-flight append is *queued behind it*"
+  no longer holds at this layer. The waiting moved up one layer, to the controller:
+  `session-controller/src/commands.ts` `delete` raises the deletion fence and awaits an
+  in-flight resume or create (`beginDeletion`), refuses a `running` Agent, and disposes
+  an idle one it owns before it calls the backend. Disposal awaits the write handle's
+  `close()`, which completes pending durability and releases the claim, so an idle
+  session's last append lands before the delete starts. A claim that survives anyway
+  reaches the client as `persistence-conflict`.
+- **`delete` proves every generation's header before it removes anything.**
+  rc.3 keeps immutable generations side by side (`session.jsonl` … `session.v3.jsonl`),
+  and `findLog` matches on the encoded id in the directory name without opening the
+  files, so without this check a corrupted artifact whose header names a different
+  session would be `rm`'d under the requested id. `deletableGenerations` reads each
+  canonical generation through `readGenerationHeader` with the requested id, and the
+  removal runs lowest version first, highest LAST: a failure part-way leaves either the
+  intact current log or no generation at all, never a silent roll-back to pre-migration
+  history. Every other refusal in this backend is retryable; a removal is not. Two traps
+  cost a data-loss defect each at rc.1 and both still apply, so do not simplify this guard:
+  - **"Unparseable" is not "anonymous".** `readGenerationHeader` answers `undefined`
+    when the first line does not `JSON.parse`, and it can THROW rather than answer -
+    a header naming another id or path, a header version that disagrees with its
+    filename, a format this build cannot read (`sessionFormatCatalog.readHeader`), a
+    retired policy field (`assertNoRetiredHeaderFields`). Those throws have to be
+    allowed to propagate.
   - **"No first line" is not "no bytes".** `readFirstLine` answers `undefined`
     at EOF-before-newline, and `readFirstZstdLine` answers `undefined` when no
     COMPLETE first frame is available - the same answer each gives for an empty
-    file. Emptiness must be decided by `stat`, or a header naming another
-    session that merely lost its newline to a crash reads as anonymous.
+    file. Emptiness is decided by `stat`: an `undefined` header on a non-empty file
+    refuses with `unidentifiableHeader`, or a header naming another session that
+    merely lost its newline to a crash would read as anonymous.
   - **A link is not a directory.** `findLog` opens THROUGH `<project>/<encoded id>`
     without an `lstat`, and `stat` follows links, so a junction standing where that
     session directory should be passes every identity check above - the log behind it
@@ -140,8 +161,8 @@ to keep correct:
     `recursive: true` unlinks such a junction WITHOUT descending into it and without
     throwing. So the hazard is not the target's contents; it is the false report. The
     link disappears, `exists` answers false, and the Host publishes a durable removal
-    for a log still sitting on disk. `deleteStored` now `lstat`s the directory and
-    refuses. Found by the Codex Sol/high review, which reasoned it as a
+    for a log still sitting on disk. `delete` `lstat`s the directory and refuses with
+    `linkShapedDirectory`. Found by the Codex Sol/high review, which reasoned it as a
     descend-and-destroy path; the measurement says the damage is a lie rather than a
     loss, and the refusal is correct either way.
 
@@ -291,34 +312,98 @@ verifier-hard.
 
 ## Rebasing onto a new upstream tag
 
+The recipe below is what the lq-a5y move to `dsh-v0.1.5-rc.3` actually did. Live F is
+never touched until the swap step; everything before it runs in a staging directory.
+
+**0. Preconditions.**
+- All fork work is committed on `codex/harness` (rule 6). If `git status` in live F is
+  not clean, stop and commit first; a dirty tree cannot be rebased and has to be
+  captured by hand, which is how rc.1 → rc.3 lost an hour.
+- The branch name stays `codex/harness` across rebases. `E:\Qwen3.8_27b\plugins\learning-supervisor.mjs`
+  reads the Working branch row above live, so a rename is a W change too.
+- No learning campaign in flight: check `~/.dsh/storages/dsh_learning.json` (read only).
+
+**1. Staging clone.** An independent clone, no object sharing (see the cutover section
+for why an alternates clone is not a backup):
+
 ```sh
-git fetch origin --tags
-git rebase --onto <new-tag> dsh-v0.1.2-rc.1 codex/harness-0.1.2-rc.1
+S=E:/staging-<bead>
+git clone --no-local E:/deepseek-harness $S/harness
+git -C $S/harness remote set-url --push origin DISABLED-push-to-upstream-forbidden
+git -C $S/harness fetch https://github.com/deepseek-ai/deepseek-harness.git --tags
+git -C $S/harness branch backup/pre-rebase-<bead> codex/harness
+git -C $S/harness worktree add $S/pristine <new-tag>     # the test baseline
+```
+
+**2. Rebase, then take upstream for generated files.**
+
+```sh
+git -C $S/harness rebase --onto <new-tag> <old-tag> codex/harness
+```
+
+On conflicts in generated docs take upstream's side, then regenerate. The `*.i18n.yaml`
+pairing records and the `.zh.md` twins are NOT regenerated by the generators (they only
+rewrite English): bring the changed rows across to the `.zh.md` side by hand, then
+re-record the pair with `verify-translation-pairing --write`. Regenerate
+`packages/extensions/tool-cordis/src/api-catalog.ts` rather than hand-merging it.
+
+**3. Gates, in the rebased tree, all must exit 0.**
+
+```sh
 corepack pnpm install --frozen-lockfile
 corepack pnpm run gen-cordis-catalog && corepack pnpm run verify-cordis-catalog
 corepack pnpm run gen-doc-graphs && corepack pnpm run gen-config-catalog
+npx tsx scripts/verify-translation-pairing.ts
+npx tsx scripts/verify-doc-budgets.ts      # rule 5: AGENTS.md must be upstream count + 13, and only 1,963 is authorised
 corepack pnpm run typecheck
 corepack pnpm run build
-corepack pnpm exec vitest run packages/api/session-controller/tests packages/session/session-persistence/tests packages/session/session-persistence-jsonl/tests packages/session/session-projection-cache/tests packages/client/ui-workspace/tests packages/compaction/compaction-basic/tests
+corepack pnpm exec vitest run packages/api/session-controller/tests packages/session/session-persistence/tests packages/session/session-persistence-jsonl/tests packages/session/session-projection-cache/tests packages/client/ui-workspace/tests packages/compaction/compaction-basic/tests packages/llm/llm/tests/brand.spec.ts
 ```
 
 Use explicit `.../tests` paths: a bare `packages/session/session-persistence`
 filter substring-matches every sibling package whose name starts with it.
 
-The generated docs drift on **every** rebase even when no source changes, because
-`docs/config-catalog.md` and `docs/event-producer-consumer.md` carry `file:line`
-Source links. Regenerate them, then bring the `.zh.md` side along and re-record
-the pair — the table rows there are untranslated generated data, so copying the
-changed rows across is correct:
+**4. Full test, compared to pristine by identity.** Run `corepack pnpm run test` in both
+`$S/harness` and `$S/pristine` (install + build pristine too). Compare failing tests by
+file + test name + failure signature, never by count. A new failing identity blocks.
+A test that fails in only one tree gets three solo reruns in each before it is called
+load-sensitive. Record the new baseline in the section below.
+
+**5. W config load, both trees:**
 
 ```sh
-npx tsx scripts/verify-translation-pairing.ts --write docs/<name>.md
+LOCAL_QWEN_API_KEY=local node $S/harness/apps/cli/lib/bin.js --profile web --patch E:/Qwen3.8_27b/deepseek-harness.yml --dump-config
 ```
 
-Regenerate `packages/extensions/tool-cordis/src/api-catalog.ts` rather than
-hand-merging it.
+**6. Swap into live F** (a separate owner go; restarting the harness kills in-flight campaigns).
+- Back up `~/.dsh` first. Session formats move forward on upgrade, and an older fork
+  cannot read turns written by a newer one.
+- Stop the harness on 3080, point live F's `codex/harness` at the rebased commit (fetch
+  from staging, then `git checkout -B codex/harness <sha>` in a clean live F), reinstall,
+  and rebuild. Then run the checks in the cutover section below.
+- Update the rows at the top of this file: Fork base, Previous base, rollback.
+- In W: `details.md` / `tasks.md` / `change_log.md` F rows, and any test fixture that
+  names the old branch.
+- Restart with `E:\Qwen3.8_27b\run-dsh-fork.ps1` and confirm `harness-branch` is green.
 
 ## Known environmental failures on this machine — not regressions
+
+**rc.3 baseline (lq-a5y, 2026-09-22).** Compare by test identity and failure signature,
+never by count. Plain `dsh-v0.1.5-rc.3` on this box (`E:/staging-lq-a5y/rc3-pristine`)
+fails 11; the fork fails 9, all 9 with the same signature as plain rc.3 except the pwsh case
+noted below. Shared, environmental, not the fork's: `pdf-license-bundle` (tar cannot resolve
+`C:`), `fs-sandbox` ×2 (symlinked-out create resolves), `native-windows` "preserves
+missing-target…", `spawn-runner` "resolves Windows executables…", `build-exe-for-python-sdk`
+×2 (quoted node path, see below), `benchmark-npm-resolution` (5,000 ms timeouts; one to three
+of its cases per run, in both trees). `tool-pwsh-persistent` `loader-composition` "preserves cwd and
+environment across calls" fails on plain rc.3 every time (end marker leaks, or 120 s timeout)
+and passes on the fork 3/3 alone: the fork's padded-status fix is what makes it pass. It timed
+out once in a loaded fork full run, with a vitest `write EAGAIN`. `lsp-stdio` "resolves the cancel
+grace…" timed out once under load and passes 3/3 alone in both trees. Evidence:
+`E:/staging-lq-a5y/logs/` (`pristine-test.log`, `harness-test.log`, `pwsh-loader-rerun.txt`,
+`lsp-rerun.txt`, `newfail-rerun.txt`).
+
+The rc.1 record below is kept as history.
 
 `corepack pnpm run test` on this box lands at **2 failed / 16,238 passed /
 65 skipped** (16,305 total across 990 files), and both failures are environmental. An

@@ -5,7 +5,19 @@ Newest first. Technical background for every entry is in [details.md](details.md
 Two repositories are involved:
 
 - **W** = `E:\Qwen3.8_27b` (this workspace, branch `main`)
-- **F** = `E:\deepseek-harness` (harness fork, branch `codex/harness-0.1.2-rc.1`, base tag `dsh-v0.1.2-rc.1`)
+- **F** = `E:\deepseek-harness` (harness fork, branch `codex/harness`, base tag `dsh-v0.1.5-rc.3`)
+
+---
+
+## 2026-09-22 — Harness fork rebased onto `dsh-v0.1.5-rc.3` in staging (lq-a5y)
+
+### F `codex/harness` — rebased in `E:/staging-lq-a5y/harness`, not yet swapped into live F
+
+- 1,493 upstream commits. The fork code was carried from live F's uncommitted tree (69 files), then rebased as three picks: the shell padded-status fix, the fork code, and the fork docs.
+- Session delete re-landed on rc.3's handle-based persistence seam. The delete guarantees in FORK.md were rewritten for it.
+- Gates rc=0. Full test vs pristine rc.3, compared by identity: 0 new failing identities. The fork fixes rc.3's pwsh loader-composition end-marker leak. Evidence: `E:/staging-lq-a5y/logs/port-report.md`.
+- Branch renamed to the stable `codex/harness`. FORK.md: new rule 6 (commit fork work) and a full staging → compare → swap recipe.
+- Session format goes v0 → v3. Back up `~/.dsh` before the swap.
 
 ---
 
