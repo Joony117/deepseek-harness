@@ -11,9 +11,10 @@
  */
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { createHash } from 'node:crypto'
 import { tmpdir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { dirname, join, relative } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
 import { z } from 'zod'
 import SessionStore, {
@@ -26,6 +27,7 @@ import SessionStore, {
 import type { SessionEvent, SessionHeader } from '@deepseek-ai/dsh-session'
 import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
 import type { ProjectionDefinition } from '@deepseek-ai/dsh-session-projection'
+import type { KvTable } from '@deepseek-ai/dsh-storage-domain'
 import Storage from '@deepseek-ai/dsh-storage'
 import {
   apply as storageJsonApply, Config as storageJsonConfig, inject as storageJsonInject, name as storageJsonName,
@@ -156,6 +158,22 @@ async function storedRecord(root: string, id: Session['id']): Promise<Checkpoint
   } catch {
     return undefined
   }
+}
+
+/**
+ * sha256 of every file under `root`, keyed by root-relative path. Digesting the
+ * whole storage root rather than just the cache records is deliberate: a rejected
+ * cleanup must leave the medium byte-identical, and this catches a write anywhere
+ * beneath it, session-log bytes included.
+ */
+async function treeDigest(root: string): Promise<Record<string, string>> {
+  const digests: Record<string, string> = {}
+  for (const entry of await readdir(root, { recursive: true, withFileTypes: true })) {
+    if (!entry.isFile()) continue
+    const full = join(entry.parentPath, entry.name)
+    digests[relative(root, full)] = createHash('sha256').update(await readFile(full)).digest('hex')
+  }
+  return digests
 }
 
 /** The stored rows for one session id (undefined = absent or unreadable). */
@@ -728,5 +746,218 @@ describe('SessionProjectionCache cold-read seeding', () => {
     await vi.waitFor(() => {
       expect(warn).toHaveBeenCalledWith(expect.stringContaining('cold-read write-back for "cold-fail" failed'))
     }, { timeout: 5_000 })
+  })
+})
+
+describe('SessionProjectionCache.cleanup', () => {
+  const emptyRows = { 'cache-test/marks': { ver: 1, seq: -1, val: null } } as const
+
+  // Records land on disk before the domain opens (matching the cold-read
+  // seeding style above), so the in-memory table picks them up at init.
+  async function seededHarness(rows: Record<string, CheckpointRecord['rows']>) {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-projcache-'))
+    roots.push(root)
+    for (const [id, r] of Object.entries(rows)) await seedRecord(root, id, r)
+    return harness({ root })
+  }
+
+  it('dry run reports stale ids but performs zero deletes', async () => {
+    const { cache, root } = await seededHarness({ 'valid-1': emptyRows, 'stale-1': emptyRows })
+
+    const result = await cache.cleanup([SessionId('valid-1')], { dryRun: true })
+
+    expect(result).toEqual({ stale: [SessionId('stale-1')], deleted: [] })
+    // A subsequent read still finds the supposedly-stale row.
+    expect(await storedRows(root, SessionId('stale-1'))).toBeDefined()
+    expect(await storedRows(root, SessionId('valid-1'))).toBeDefined()
+  })
+
+  it('apply mode removes exactly the stale rows and leaves valid ids intact', async () => {
+    const { cache, root } = await seededHarness({ 'valid-1': emptyRows, 'stale-1': emptyRows, 'stale-2': emptyRows })
+
+    const result = await cache.cleanup([SessionId('valid-1')], { dryRun: false })
+
+    expect(result.stale).toEqual([SessionId('stale-1'), SessionId('stale-2')])
+    expect([...result.deleted].sort()).toEqual([SessionId('stale-1'), SessionId('stale-2')])
+    expect(await storedRows(root, SessionId('stale-1'))).toBeUndefined()
+    expect(await storedRows(root, SessionId('stale-2'))).toBeUndefined()
+    expect(await storedRows(root, SessionId('valid-1'))).toBeDefined()
+  })
+
+  it('returns stale ids sorted regardless of insertion order', async () => {
+    const { cache } = await seededHarness({
+      'stale-charlie': emptyRows,
+      'stale-alpha': emptyRows,
+      'stale-bravo': emptyRows,
+    })
+
+    const result = await cache.cleanup([], { dryRun: true })
+
+    expect(result.stale).toEqual([SessionId('stale-alpha'), SessionId('stale-bravo'), SessionId('stale-charlie')])
+  })
+
+  it('an already-aborted signal rejects before doing any work, even for a dry run', async () => {
+    const { cache, root } = await seededHarness({ 'stale-1': emptyRows })
+    const controller = new AbortController()
+    controller.abort()
+
+    await expect(cache.cleanup([], { dryRun: true, signal: controller.signal })).rejects.toThrow()
+    // Not a successful dry run: the stale row was never even inspected/removed.
+    expect(await storedRows(root, SessionId('stale-1'))).toBeDefined()
+  })
+
+  it('an empty validIds set treats every cached row as stale', async () => {
+    const { cache, root } = await seededHarness({ 'stale-1': emptyRows, 'stale-2': emptyRows })
+
+    const result = await cache.cleanup([], { dryRun: false })
+
+    expect(result.stale).toEqual([SessionId('stale-1'), SessionId('stale-2')])
+    expect(result.deleted).toEqual([SessionId('stale-1'), SessionId('stale-2')])
+    expect(await storedRows(root, SessionId('stale-1'))).toBeUndefined()
+    expect(await storedRows(root, SessionId('stale-2'))).toBeUndefined()
+  })
+
+  it('a signal aborted after the first delete stops before the next one', async () => {
+    const { cache, root } = await seededHarness({ 'stale-a': emptyRows, 'stale-b': emptyRows })
+    const controller = new AbortController()
+    // Reach the private table to hook the real delete. Cast through `unknown`
+    // rather than `any` so the shape is stated explicitly and nothing else on
+    // `cache` loses its type.
+    const table = (cache as unknown as { table: KvTable<SessionId, CheckpointRecord> }).table
+    const originalDelete = table.delete.bind(table)
+    const deleteSpy = vi.spyOn(table, 'delete').mockImplementation(async (id: SessionId) => {
+      const result = await originalDelete(id)
+      controller.abort() // fires after the first delete lands, before the second is attempted
+      return result
+    })
+
+    await expect(cache.cleanup([], { dryRun: false, signal: controller.signal })).rejects.toThrow()
+
+    expect(deleteSpy).toHaveBeenCalledTimes(1)
+    expect(await storedRows(root, SessionId('stale-a'))).toBeUndefined() // deleted before the abort was observed
+    expect(await storedRows(root, SessionId('stale-b'))).toBeDefined() // never reached
+  })
+
+  it('a signal aborted after the entry guard but before the first delete rejects with zero deletes performed', async () => {
+    const { cache, root } = await seededHarness({ 'stale-a': emptyRows, 'stale-b': emptyRows })
+    const controller = new AbortController()
+    const table = (cache as unknown as { table: KvTable<SessionId, CheckpointRecord> }).table
+    const originalKeys = table.keys.bind(table)
+    const deleteSpy = vi.spyOn(table, 'delete')
+    // `keys()` runs synchronously right after the top-level throwIfAborted (the
+    // entry guard) and right before `stale` is computed and the loop's own
+    // throwIfAborted on its first iteration — the only sync window between
+    // the two checks.
+    vi.spyOn(table, 'keys').mockImplementation(() => {
+      controller.abort()
+      return originalKeys()
+    })
+
+    await expect(cache.cleanup([], { dryRun: false, signal: controller.signal })).rejects.toThrow()
+
+    expect(deleteSpy).not.toHaveBeenCalled()
+    expect(await storedRows(root, SessionId('stale-a'))).toBeDefined() // no delete actually landed
+    expect(await storedRows(root, SessionId('stale-b'))).toBeDefined()
+  })
+
+  it('a stale id whose delete returns false is reported stale but not deleted', async () => {
+    const { cache, root } = await seededHarness({ 'stale-a': emptyRows, 'stale-b': emptyRows })
+    const table = (cache as unknown as { table: KvTable<SessionId, CheckpointRecord> }).table
+    const originalDelete = table.delete.bind(table)
+    vi.spyOn(table, 'delete').mockImplementation(async (id: SessionId) => {
+      if (id === SessionId('stale-a')) return false
+      return originalDelete(id)
+    })
+
+    const result = await cache.cleanup([], { dryRun: false })
+
+    expect(result.stale).toEqual([SessionId('stale-a'), SessionId('stale-b')])
+    expect(result.deleted).toEqual([SessionId('stale-b')])
+    expect(await storedRows(root, SessionId('stale-b'))).toBeUndefined()
+  })
+
+  // `cleanup` trusts `validIds` completely and cannot tell a partial listing
+  // from a real one, so a caller whose listing fails must fail closed rather
+  // than call cleanup with what it managed to read.
+  it('a validIds set missing a live id deletes that live row, so a caller must never pass a partial listing', async () => {
+    const { cache, root } = await seededHarness({ 'live-1': emptyRows, 'live-2': emptyRows, 'stale-1': emptyRows })
+
+    const result = await cache.cleanup([SessionId('live-1')], { dryRun: false })
+
+    expect(result.stale).toEqual([SessionId('live-2'), SessionId('stale-1')])
+    expect(result.deleted).toEqual([SessionId('live-2'), SessionId('stale-1')])
+    expect(await storedRows(root, SessionId('live-2'))).toBeUndefined()
+    expect(await storedRows(root, SessionId('live-1'))).toBeDefined()
+  })
+
+  // `cleanup` itself no longer lists persistence (it takes `validIds` as a
+  // parameter); the fail-closed guarantee the old self-listing version had
+  // "by construction" now depends entirely on the caller awaiting its own
+  // listing before calling cleanup. This composition is what a real caller
+  // must perform, and both cases below route through it so the failure case
+  // cannot pass merely because the composition never actually works.
+  async function cleanupViaPersistenceListing(
+    ctx: Context,
+    cache: SessionProjectionCache,
+    signal?: AbortSignal,
+  ): Promise<{ stale: SessionId[]; deleted: SessionId[] }> {
+    const ids = (await ctx.sessionPersistence.list(signal === undefined ? undefined : { signal }))
+      .map(snapshot => snapshot.header.id)
+    return cache.cleanup(ids, { dryRun: false, ...signal === undefined ? {} : { signal } })
+  }
+
+  // A representative session-log document, seeded so the byte assertions below
+  // are not vacuous. The cache domain and SessionStore share this storage root,
+  // so a cleanup that reached past its own records would surface here.
+  async function seedSessionLog(root: string, id: string): Promise<void> {
+    const path = join(root, 'session_log', 'sessions', `${id}.jsonl`)
+    await mkdir(dirname(path), { recursive: true })
+    await writeFile(path, `${JSON.stringify({ seq: 0, kind: 'representative-log-bytes' })}\n`)
+  }
+
+  it('a rejecting persistence listing aborts the whole cleanup composition, deleting nothing', async () => {
+    const { ctx, cache, root } = await seededHarness({ 'live-1': emptyRows, 'stale-1': emptyRows })
+    await seedSessionLog(root, 'live-1')
+    await seedSessionLog(root, 'stale-1')
+    ctx.provide('sessionPersistence', {
+      list: async () => { throw new Error('listing failed') },
+    } as never)
+    const table = (cache as unknown as { table: KvTable<SessionId, CheckpointRecord> }).table
+    const deleteSpy = vi.spyOn(table, 'delete')
+    const cleanupSpy = vi.spyOn(cache, 'cleanup')
+    const before = await treeDigest(root)
+
+    await expect(cleanupViaPersistenceListing(ctx, cache)).rejects.toThrow('listing failed')
+
+    // Zero cleanup calls, not merely zero deletes: the composition has to
+    // reject before it reaches the API at all.
+    expect(cleanupSpy).not.toHaveBeenCalled()
+    expect(deleteSpy).not.toHaveBeenCalled()
+    // Byte-for-byte rather than merely present: every file under the storage
+    // root is unchanged, cache records and session-log bytes alike.
+    expect(await treeDigest(root)).toEqual(before)
+    expect(await storedRows(root, SessionId('live-1'))).toBeDefined()
+    expect(await storedRows(root, SessionId('stale-1'))).toBeDefined()
+  })
+
+  it('a resolving persistence listing performs the expected cleanup (positive control)', async () => {
+    const { ctx, cache, root } = await seededHarness({ 'live-1': emptyRows, 'stale-1': emptyRows })
+    await seedSessionLog(root, 'live-1')
+    await seedSessionLog(root, 'stale-1')
+    ctx.provide('sessionPersistence', {
+      list: async () => [{ header: headerOf(SessionId('live-1')) }],
+    } as never)
+    const cleanupSpy = vi.spyOn(cache, 'cleanup')
+    const before = await treeDigest(root)
+
+    const result = await cleanupViaPersistenceListing(ctx, cache)
+
+    // Both instruments register a real effect here, so the failure case above
+    // cannot pass merely because the spy or the digest never works.
+    expect(cleanupSpy).toHaveBeenCalledTimes(1)
+    expect(await treeDigest(root)).not.toEqual(before)
+    expect(result.deleted).toEqual([SessionId('stale-1')])
+    expect(await storedRows(root, SessionId('stale-1'))).toBeUndefined()
+    expect(await storedRows(root, SessionId('live-1'))).toBeDefined()
   })
 })

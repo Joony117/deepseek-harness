@@ -135,3 +135,29 @@ export function sessionFormatVersionRefusal(id: string, version: number): string
     ? `session "${id}" uses log format v${version}, but this harness reads only v${SESSION_FORMAT_VERSION}: the log was written by a newer harness — upgrade the harness to open it`
     : `session "${id}" uses log format v${version}, older than the supported v${SESSION_FORMAT_VERSION}, and this build ships no upgrade path for it`
 }
+
+/**
+ * Why a durable Session deletion was refused while a claim on the identity
+ * survives. rc.3's single-writer seam folds the rc.1 coordinator's six claim
+ * kinds into two: every writer (live owner, a create or write open still
+ * constructing, another process's kernel lease) is one claim, and every
+ * in-flight reader (an open read handle, a historical migration decode) is
+ * the other.
+ */
+export type SessionDeleteConflict =
+  /** A write claim holds the identity, in this process or another; dispose or close it first. */
+  | 'live'
+  /** A read handle or a historical migration decode for the identity is in flight. */
+  | 'loading'
+
+/** A durable deletion was refused because the identity is still claimed. */
+export class SessionDeleteConflictError extends Error {
+  /**
+   * @param sessionId - identity whose deletion was refused.
+   * @param conflict - the surviving claim that blocked it.
+   */
+  constructor(readonly sessionId: SessionId, readonly conflict: SessionDeleteConflict) {
+    super(`cannot delete session "${sessionId}": it is ${conflict}`)
+    this.name = 'SessionDeleteConflictError'
+  }
+}

@@ -299,6 +299,7 @@ interface FixtureSessionApi {
   }): Promise<ConnectionRpcResult<unknown>>
   rename(request: { readonly sessionId: SessionId; readonly title: string }): Promise<ConnectionRpcResult<unknown>>
   fork(request: { readonly sessionId: SessionId; readonly atSeq?: number }): Promise<ConnectionRpcResult<unknown>>
+  delete(request: { readonly sessionId: SessionId }): Promise<ConnectionRpcResult<unknown>>
   history(request: {
     readonly sessionId: SessionId
     readonly throughSeq?: number
@@ -3262,6 +3263,16 @@ function createFixtureWorld(options: FixtureOptions): FixtureWorld {
       }
       return sessionOk({ sessionId: child.sessionId })
     },
+    // The fixture world is in-memory: there is no durable log to remove, so it
+    // refuses with the code the Host uses for a backend that cannot delete.
+    // Rejecting from the route default instead would surface as a raw transport
+    // Error and the browser would show the code-less backend-failure sentence
+    // rather than the real one.
+    delete: request => sessionErr({
+      code: 'session/delete-unsupported',
+      message: 'the in-memory fixture does not provide durable session deletion',
+      details: { sessionId: request.sessionId },
+    }),
     history: async (request) => {
       const log = logs.get(request.sessionId) ?? []
       const throughSeq = request.throughSeq ?? log.length - 1
@@ -3957,6 +3968,9 @@ function createFixtureWorld(options: FixtureOptions): FixtureWorld {
         )
         case 'session/fork': return sessionApi.fork(
           request as Parameters<FixtureSessionApi['fork']>[0],
+        )
+        case 'session/delete': return sessionApi.delete(
+          request as Parameters<FixtureSessionApi['delete']>[0],
         )
         case 'session/prompt': return sessionApi.prompt(
           request as Parameters<FixtureSessionApi['prompt']>[0],

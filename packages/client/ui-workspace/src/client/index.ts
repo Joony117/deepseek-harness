@@ -126,6 +126,23 @@ export function apply(ctx: Context): void {
       await workspaces.insertBefore(workspaceId, beforeWorkspaceId)
     },
     archiveSession: async (sessionId) => { await uiWorkspace.archiveSession(sessionId) },
+    // List-service verb, not a session-face hop: deletion removes a row from
+    // the list. The RemoteResult failure branch is folded into the resolved
+    // value — a refusal is an answer the dialog renders on the row that is
+    // still there, not an exception. Nothing is removed here; the Host's
+    // `api-session/removed` event is the only removal path.
+    deleteSession: async (sessionId) => {
+      const result = await sessions.delete(sessionId)
+      if (result.ok) return undefined
+      const { error } = result
+      if (error.code === 'session/delete-unavailable') {
+        return { reason: error.details.reason, message: error.message }
+      }
+      if (error.code === 'session/delete-unsupported') {
+        return { reason: 'unsupported', message: error.message }
+      }
+      return { message: error.message }
+    },
     insertSessionBefore: async (workspaceId, sessionId, beforeSessionId) => {
       await workspaces.insertSessionBefore(workspaceId, sessionId, beforeSessionId)
     },

@@ -117,7 +117,7 @@ Generated from source by `scripts/gen-cordis-catalog.ts` (verified fresh by `pnp
 
 ### `ctx.sessionProjectionCache` — `SessionProjectionCache`
 
-The persisted projection cache service. Opens the `session_projcache` domain at init, checkpoints live sessions on a throttled write-behind (count/interval triggers from Config) plus three mandatory points — session creation, `turn/end`, and session disposal (the live-to-cold moment) — and serves the cached rows for a session header. Every durable write is fail-soft: failures log a warning and the cache self-heals on the next write.
+The persisted projection cache service. Opens the `session_projcache` domain at init, checkpoints live sessions on a throttled write-behind (count/interval triggers from Config) plus three mandatory points — session creation, `turn/end`, and session disposal (the live-to-cold moment) — and serves the cached rows for a session header. Every durable write is fail-soft: failures log a warning and the cache self-heals on the next write. `cleanup` reclaims rows for sessions the caller reports as gone; it never removes a session log and never consults the persistence layer.
 
 ```ts cordis-catalog
 /**
@@ -192,9 +192,38 @@ async write(session: Session): Promise<void>
  * @returns the projection cut at the log end.
  */
 coldSnapshot( meta: SessionHeader, inheritedEventCount: SessionLogOffset, events: readonly SessionEvent[], ): ProjectionSnapshot
+
+/**
+ * Drop cache rows whose ids are absent from `validIds` — the caller's
+ * authoritative valid-session set. Snapshots table keys before any mutation.
+ * A row is stale only when that set omits its id; `ctx.sessions` residency,
+ * log identity, and session directories are not consulted. `dryRun: true`
+ * reports stale ids and performs zero deletes. Apply mode calls only
+ * {@link KvTable.delete}; `deleted` is the subset that actually existed.
+ *
+ * The valid set is a PARAMETER, not a persistence `list` this service calls
+ * itself. Our pre-upgrade version injected `sessionPersistence` and listed
+ * internally; rc.1 states the opposite invariant for the sibling cold read
+ * ("this service never consults the persistence layer") and dropped that
+ * inject. Taking the set as an argument preserves the old behavior and
+ * return shape without reintroducing the dependency — the deletion frontend
+ * already holds persistence and lists there.
+ *
+ * NEVER deletes a session log. This reclaims a read model, and the direction
+ * of that dependency is what stops a cache bug from destroying user data.
+ *
+ * A durable deletion leaves its row behind until a sweep runs. That is
+ * deliberate: the cache is defined as possibly stale but never wrong, and a
+ * frontend that must not show the row after a delete drops that one id
+ * rather than making every delete wait on a full listing.
+ * @param validIds - every session id that still exists; everything else is stale.
+ * @param options - required `dryRun`; optional `signal` checked before any work and between deletes.
+ * @returns stale ids in sorted order, and the ids actually removed (empty on dry-run).
+ */
+async cleanup( validIds: Iterable<SessionId>, options: { dryRun: boolean; signal?: AbortSignal }, ): Promise<{ stale: SessionId[]; deleted: SessionId[] }>
 ```
 
-Types: [Session](session.zh.md) · [SessionEvent](session.zh.md) · [SessionHeader](persistence.zh.md) · [SessionLogOffset](session.zh.md)
+Types: [Session](session.zh.md) · [SessionEvent](session.zh.md) · [SessionHeader](persistence.zh.md) · [SessionId](core.zh.md) · [SessionLogOffset](session.zh.md)
 
 Source: [`packages/session/session-projection-cache/src/index.ts`](../../packages/session/session-projection-cache/src/index.ts)
 

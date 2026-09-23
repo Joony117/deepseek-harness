@@ -385,7 +385,7 @@ describe('tool-bash-persistent', () => {
     // recognised as completion; otherwise the fallback path leaks the end marker.
     session.mode = 'padded-status'
     const padded = text(await call(ctx, owner, 'padded'))
-    expect(padded).toContain('[exit code: 7]')
+    expect(padded).toContain('[Command finished with exit code 7]')
     expect(padded).not.toMatch(/__DSH_PERSISTENT_BASH_END_[^:]+:/)
 
     session.mode = 'exit'
