@@ -292,4 +292,25 @@ describe('Session fork failures', () => {
     expect(options.meta?.agentPreset).toBe('minimal')
     await ctx.fiber.dispose()
   })
+
+  it('retains the forked child so it can later delete itself', async () => {
+    const ctx = await baseContext()
+    ctx.provide('workspaceRegistry', { list: () => [] } as never)
+    const source = completedSession(ctx, 'retained-source', '/workspace')
+    vi.spyOn(ctx.agents, 'create').mockImplementation(
+      (options: CreateAgentOptions) => Promise.resolve(resolvedHandle(ctx, options.sessionId)),
+    )
+    // Fork bypasses the controller's own create/resume path, so retention here
+    // is a separate call that is easy to omit. It is not cosmetic: deletion
+    // refuses any live Agent this service holds no handle for, so an unretained
+    // child would be undeletable until the harness restarted.
+    const agents = controllerAgents(ctx)
+    const retain = vi.spyOn(agents, 'retain')
+    const controller = new SessionCommandController(ctx, agents, '/default')
+
+    const forked = await controller.fork({ sessionId: source.id })
+
+    expect(retain.mock.calls.map(([handle]) => handle.agent.id)).toEqual([forked.sessionId])
+    await ctx.fiber.dispose()
+  })
 })

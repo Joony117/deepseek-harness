@@ -311,7 +311,7 @@ export class TestSessions implements ISessions {
 
   /** Calls observed on the service-level face, newest last. */
   readonly calls: {
-    method: 'create' | 'refreshProjections' | 'refresh' | 'search' | 'fork'
+    method: 'create' | 'refreshProjections' | 'refresh' | 'search' | 'fork' | 'delete'
     args: unknown[]
   }[] = []
 
@@ -680,6 +680,19 @@ export class TestSessions implements ISessions {
   fork(opts: Parameters<ISessions['fork']>[0]): Promise<SessionId> {
     this.calls.push({ method: 'fork', args: [opts] })
     return Promise.resolve(opts.sessionId)
+  }
+
+  /**
+   * Recorded delete stub: acknowledges without removing the record, mirroring
+   * production - only the Host's authoritative `api-session/removed` takes a
+   * row out of the list.
+   * @param sessionId - session id the caller asked to delete.
+   * @param signal - cancellation, recorded and otherwise unused.
+   * @returns the acknowledgement.
+   */
+  delete(sessionId: SessionId, signal?: AbortSignal): ReturnType<ISessions['delete']> {
+    this.calls.push({ method: 'delete', args: [sessionId, signal] })
+    return Promise.resolve({ ok: true, value: { deleted: true } })
   }
 
   /**
