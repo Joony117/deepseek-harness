@@ -116,6 +116,14 @@ describe('Session ordering', () => {
       .toEqual([sid('fresh-pin'), sid('stale-pin'), sid('plain')])
   })
 
+  it('shows no row for a deleted Session whose id the pin and archive sets still hold (fork delete)', () => {
+    // The Host's delete removes the Session, not its id from the registry's pin/archive sets.
+    const sessions = list(summary('plain', 20))
+    const state = rowState({ pinned: ['deleted-pin'], archived: ['deleted-archive'], archivedFilter: 'show' })
+    const ids = [sid('deleted-pin'), sid('deleted-archive'), sid('plain')]
+    expect(deriveFlat(sessions, ids, state, noAttention).map(row => row.id)).toEqual([sid('plain')])
+  })
+
   it('reconciles retained manual slots and appends newly known members by recency', () => {
     const summaries = list(summary('kept', 1), summary('newer', 30), summary('older', 20)).byId
     expect(reconcileManualOrder(
