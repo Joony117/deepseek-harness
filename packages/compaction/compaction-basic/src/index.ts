@@ -229,8 +229,11 @@ export class BasicCompactionEngine extends CompactionEngine {
           }
           const message = error instanceof Error ? error.message : String(error)
           ctx.logger.warn(`step compaction failed: ${message}; continuing the turn`)
+          // A pressure config error is warned once and never recorded: no compaction was attempted.
           // oxlint-disable-next-line typescript/no-unnecessary-condition -- the signal can abort while compaction is awaited.
-          if (!signal.aborted) this.recordAutomaticFailure(agent.session, 'step pressure', error, from)
+          if (!signal.aborted && !(error instanceof TargetPressureConfigError)) {
+            this.recordAutomaticFailure(agent.session, 'step pressure', error, from)
+          }
         }
       }
       return next()

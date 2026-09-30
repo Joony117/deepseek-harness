@@ -1851,11 +1851,8 @@ describe('automatic listener and loader composition', () => {
   it('records an automatic failure that never opened a region as a failed compaction', async () => {
     const ctx = createContext()
     ctx.logger.warn = (() => undefined) as typeof ctx.logger.warn
-    vi.spyOn(ctx.llm, 'resolveModelInfo').mockImplementation((provider, model) => Promise.resolve({
-      provider,
-      id: model,
-      name: model,
-    }))
+    // A failed route lookup, not a config error (those are warned once and never recorded).
+    vi.spyOn(ctx.llm, 'resolveModelInfo').mockRejectedValue(new Error('model route unavailable'))
     void new TestCompactionEngine(ctx, { thresholdRatio: 0.5, retainTokens: 180 })
     const session = conversation(4)
 
@@ -1871,16 +1868,14 @@ describe('automatic listener and loader composition', () => {
     expect(start?.data.turn).toBe(5)
     expect(end?.data.turn).toBe(start?.data.turn)
     expect(end?.data.compactionId).toBe(start?.data.compactionId)
-    expect(end?.data.error).toEqual(
-      expect.stringContaining(`no context capacity for ${MODEL}/${MODEL}`),
-    )
+    expect(end?.data.error).toEqual(expect.stringContaining('model route unavailable'))
     expect(events.some(event => event.type === 'compaction/summary')).toBe(false)
   })
 
   it('does not double-record a failure the region transaction already closed', async () => {
     const ctx = createContext()
     ctx.logger.warn = (() => undefined) as typeof ctx.logger.warn
-    const compact = new TestCompactionEngine(ctx, { thresholdRatio: 0.5, retainTokens: 180 })
+    const compact = new TestCompactionEngine(ctx, { headroomTokens: 0, maxTokens: 8192, thresholdRatio: 0.5, retainTokens: 180 })
     compact.error = new Error('summarization truncated at the token cap (incomplete checkpoint)')
     const session = conversation(4)
 
