@@ -39,6 +39,14 @@ export function ToolCallId(id: string): ToolCallId {
   return brandString<ToolCallId>(id)
 }
 
+/**
+ * Backward-compatible name used by subscription-provider plugins built
+ * against the pre-rename public API. New harness code should use
+ * {@link ToolCallId}; both constructors are the same zero-cost brand.
+ */
+export type CallId = ToolCallId
+export const CallId = ToolCallId
+
 /** Provider-issued request identifier retained for diagnostics across package boundaries. */
 export type ProviderRequestId = Branded<'ProviderRequestId'>
 
