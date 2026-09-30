@@ -42,6 +42,8 @@ import type {
   SessionControlFrame,
   SessionCreateRequest,
   SessionCreateValue,
+  SessionDeleteRequest,
+  SessionDeleteValue,
   SessionForkRequest,
   SessionForkValue,
   SessionFollowFrame,
@@ -80,6 +82,7 @@ export interface TestSessionRemote {
   modelCatalog(): Promise<RemoteResult<ModelCatalog>>
   rename(request: SessionRenameRequest): Promise<RemoteResult<SessionRenameValue>>
   fork(request: SessionForkRequest): Promise<RemoteResult<SessionForkValue>>
+  delete(request: SessionDeleteRequest, signal?: AbortSignal): Promise<RemoteResult<SessionDeleteValue>>
   prompt(request: SessionPromptRequest, signal?: AbortSignal): Promise<RemoteResult<SessionPromptValue>>
   attachment(request: SessionAttachmentRequest): Promise<RemoteResult<SessionAttachmentValue>>
   updateQueue(request: SessionUpdateQueueRequest): Promise<RemoteResult<SessionUpdateQueueValue>>
@@ -378,6 +381,10 @@ export async function createSessionTestRemote(
     modelCatalog: () => remoteResult(() => direct.modelCatalog()),
     rename: request => remoteResult(() => direct.rename(request)),
     fork: request => remoteResult(() => direct.fork(request)),
+    delete: (request, signal = new AbortController().signal) => remoteResult(
+      () => direct.delete(request, signal),
+      signal,
+    ),
     prompt: (request, signal = new AbortController().signal) => remoteResult(
       () => direct.prompt(request, signal),
       signal,
