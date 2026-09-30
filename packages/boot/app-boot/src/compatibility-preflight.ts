@@ -69,7 +69,8 @@ function manifestOf(ctx: Context, name: string, parentURL: string): object | und
  * @param parentURL Resolution base of the tree that will import these rows.
  * @param binName Diagnostic prefix for a denied row; defaults to `dsh`.
  * @returns Detached rows with incompatible entries denied; reads the profile compatibility file once.
- * @throws For malformed compatibility permissions or a profile composition without a resolution base.
+ * @throws For malformed compatibility permissions or a profile composition without a resolution base;
+ * fork: under `DSH_STRICT_STARTUP=1`, for any denied row instead of disabling it.
  */
 export function prepareProfileEntries(
   ctx: Context, entries: readonly EntryOptions[], parentURL: string | undefined, binName = 'dsh',
@@ -77,11 +78,12 @@ export function prepareProfileEntries(
   // Admission runs before the composed tree mounts, so no plugin-owned logger exporter exists yet;
   // composition-stage diagnostics go to stderr like the profile launcher's skipped-bundle report.
   return preflight(ctx, entries, parentURL, (row, reason) => {
-    // Preset rows may omit ids, and a bundle row's name is its resolved module URL.
-    const label = typeof row.id === 'string' ? `row ${JSON.stringify(row.id)}` : row.name
-    process.stderr.write(`${binName}: disabling profile plugin ${label}: ${reason}\n`)
+    process.stderr.write(`${binName}: disabling profile plugin ${rowLabel(row)}: ${reason}\n`)
   }).rows
 }
+
+/** Preset rows may omit ids, and a bundle row's name is its resolved module URL. */
+const rowLabel = (row: EntryOptions): string => typeof row.id === 'string' ? `row ${JSON.stringify(row.id)}` : row.name
 
 /** Denial reporter invoked once per denied row. */
 type DenialReporter = (row: EntryOptions, reason: string) => void
@@ -112,6 +114,10 @@ function preflight(
     }
   }
   const deny = (row: EntryOptions, reason: string): void => {
+    // Fork: a disabled row escapes auditStartupEntries, so strict startup refuses here instead.
+    if (process.env.DSH_STRICT_STARTUP === '1') {
+      throw new Error(`strict startup: profile plugin ${rowLabel(row)} is incompatible: ${reason}`)
+    }
     row.disabled = true
     if (row.group) row.group = false
     report(row, reason)
