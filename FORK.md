@@ -44,6 +44,7 @@ earlier moves (rc.1 cutover, rc.3 rebase, review rounds) lives in the tracker
 | (b) compaction | a failed automatic compaction is recorded; the summarizer runs with thinking off |
 | (c) CallId alias | `packages/llm/llm/src/brand.ts` |
 | (d) strict startup | `DSH_STRICT_STARTUP=1` makes every inactive Loader entry fatal in `auditStartupEntries` (rc.2 fails only for its required ids) |
+| (d2) strict preflight | under the same switch a compatibility-preflight denial throws instead of disabling the row; an `allow-version` exemption still admits it |
 | (e) this file | |
 
 Generated catalogs, docs graphs and `*.i18n.yaml` records are not carried as hand edits:
@@ -53,13 +54,13 @@ they are regenerated after a rebase (recipe step 3).
 
 1. Admission is the backend's single-writer claim (`claimWrite`), held for the whole removal. A held claim refuses (`live`); it never queues.
 2. An open read handle or a migration decode refuses as `loading`.
-3. The controller raises the deletion fence, then awaits every resume AND create registered for the id (`Promise.allSettled`).
+3. **Dual waiting.** The controller raises the deletion fence, then awaits every resume AND every create registered for the id, both when both are pending (`Promise.allSettled`).
 4. A `running` Agent is refused, never waited for. An idle owned Agent is disposed first; its `close()` releases the claim.
-5. Every canonical generation's header is proven for the requested id before anything is removed. Header throws propagate.
-6. An `undefined` header on a non-empty file refuses (`unidentifiableHeader`). Emptiness comes from `lstat` size, not the reader.
-7. The session directory must not be a link (`linkShapedDirectory`); each generation must be a regular file (`irregularGeneration`).
-8. Removal runs lowest version first, current log last: a partial failure never rolls back to pre-migration history.
-9. `ownsRemoval` applies only to a claimed delete: the delete publishes `api-session/removed` after durable absence; every other disposal publishes as upstream.
+5. **Header proof.** Every canonical generation's header is proven for the requested id before anything is removed. Header throws propagate.
+6. **Size proof.** An `undefined` header on a non-empty file refuses (`unidentifiableHeader`). Emptiness comes from `lstat` size, not the reader.
+7. **Link refusals.** The session directory must not be a link (`linkShapedDirectory`); each generation must be a regular file (`irregularGeneration`).
+8. **Highest generation last.** Removal runs lowest version first, highest last: a partial failure never rolls back to pre-migration history.
+9. **Delete-only `ownsRemoval`.** Only a claimed delete publishes `api-session/removed` itself, after durable absence; every other disposal publishes as upstream.
 10. The client removes nothing locally: a refused delete keeps its row and shows the reason.
 
 ## Rebasing onto a new upstream tag
@@ -106,22 +107,45 @@ duration). A crashed worker hides tests as `pending`: rerun their file alone.
 - Config load exits 0 and its stderr has no `did not activate`, `disabling profile plugin`
   or `patch: entry` line:
   `LOCAL_QWEN_API_KEY=local node $S/harness/apps/cli/lib/bin.js --profile web --patch E:/Qwen3.8_27b/deepseek-harness.yml --dump-config`
+- `--dump-config` runs neither the startup audit nor the preflight, so it proves composition
+  only. The strict check is the boot:
 - Keyless boot `--port 0` with `DSH_STRICT_STARTUP=1` in a scratch `DSH_HOME`/`HOME`/`USERPROFILE`:
-  no warning lines, and the engine worker loads.
+  no warning lines, the engine worker loads, and the expected W and subscriptions entries are
+  active (strict mode cannot see an entry that is missing from the tree). Any W path that is
+  absolute (memteach stores, supervisor `harnessRoot`) points at staging copies too.
 - Every W plugin that writes session messages uses its own source kind (never `plugin`;
   v4 persistence refuses it and the session log stops draining).
 - Every `file://` or packaged W plugin's `@deepseek-ai/dsh*` peer range admits the new version.
 
-**5. Dry run on a copy of `~/.dsh`** (owner go; never open credentials): migration of
-every session, resume of a few, rollback rehearsal on the previous branch with
-`corepack pnpm install --offline --frozen-lockfile` and a build.
+**5. Dry run on a copy of `~/.dsh`** (owner go; never open credentials). Snapshot order as
+in step 6: check campaigns, stop the harness and confirm it exited, then tar.
+- **Migration acceptance (counts only):** open every listed session in the copy for write
+  with the new tree and print `directories`, `listed`, `migrated`, `alreadyCurrent` and
+  `refused` by error class, never ids, paths or content. Pass is `listed == directories`
+  and zero refusals. Anything else goes to the owner for a disposition before the swap.
+  Resuming a few sessions is not a substitute: it cannot see a session left out of `list`.
+- **Rollback rehearsal:** extract the tar into an EMPTY scratch home and open it with the
+  previous tree, built after `corepack pnpm install --offline --frozen-lockfile`.
 
-**6. Swap** (owner go). Stop the harness; tar `~/.dsh` to `$S/backups/`; keep the old
-head as `codex/harness-<old-version>`; move `codex/harness` to the staged head in a clean
-live F; install; build; restart with `E:\Qwen3.8_27b\run-dsh-fork.ps1`; confirm
-`harness-branch` is green; update the Fork base, Previous base and Rollback rows; push
-both heads to `fork`. Session formats move forward: after the swap the old tree cannot
-read new turns, so a rollback restores the tar and loses them.
+**6. Swap** (owner go), in this order:
+1. Step 0 preconditions again (campaigns, 3080 PID owner).
+2. Stop the harness and confirm the process exited. Only then tar `~/.dsh` to `$S/backups/`.
+3. In W, make `.prev` copies of every file the swap replaces, and copy `E:/memteach-pkg`
+   aside, before any candidate is promoted.
+4. Keep the old head as `codex/harness-<old-version>`; move `codex/harness` to the staged
+   head in a clean live F; install; build.
+5. Apply the W candidates; retire any other launcher that shares `~/.dsh` on another build
+   (at rc.2: `E:\Qwen3.8_27b\run-dsh.ps1`).
+6. Restart with `E:\Qwen3.8_27b\run-dsh-fork.ps1`; confirm `harness-branch` is green.
+7. **Live UI delete check (every rebase):** delete a throwaway session from the row menu;
+   the row disappears and its session directory is gone. A refused delete keeps the row.
+8. Update the Fork base, Previous base and Rollback rows; push both heads to `fork`.
+
+**Rollback.** Stop the harness. Move the new-era `~/.dsh` aside (keep it; never extract the
+tar over it: newer generations would survive and the old tree would pick the highest and
+refuse it). Extract the tar into a clean home, move `codex/harness` back, offline install,
+build, restore W's `.prev` files. Turns written after the swap are lost. Rollback does not
+undo Windows ACL grants made on workspaces by the sandbox; account for them separately.
 
 ## Known failures at the base (not regressions)
 
