@@ -31,7 +31,7 @@ import { agentEvents, type Agent } from '@deepseek-ai/dsh-agent'
 const MODEL = 'test-model'
 const SIGNAL = new AbortController().signal
 
-/** A route advertising no context window, so pressure resolution fails before the region opens. */
+/** A registered route; the spec fails its model lookup so pressure resolution fails before the region opens. */
 class CapacitylessAdapter extends LlmAdapter {
   override async * stream(): AsyncIterable<StreamChunk> {
     yield { type: 'finish', reason: { kind: 'stop' } }
@@ -92,13 +92,10 @@ describe('automatic compaction failure bracket under the compaction invariant', 
     // visible here instead of looking like "nothing was recorded".
     const warnings: string[] = []
     ctx.logger.warn = ((message: string) => { warnings.push(message) }) as typeof ctx.logger.warn
-    // Resolve the route with no context metadata: pressure resolution fails
-    // before `compactSurfaceRegion` runs, so no region-owned bracket exists.
-    vi.spyOn(ctx.llm, 'resolveModelInfo').mockImplementation((provider, model) => Promise.resolve({
-      provider,
-      id: model,
-      name: model,
-    }))
+    // Fail the route lookup: pressure resolution fails before
+    // `compactSurfaceRegion` runs, so no region-owned bracket exists. (A route
+    // with no context metadata is a config error at rc.2: warned, not recorded.)
+    vi.spyOn(ctx.llm, 'resolveModelInfo').mockRejectedValue(new Error('model route unavailable'))
     void new BasicCompactionEngine(ctx, { thresholdRatio: 0.5, retainTokens: 180 })
     const session = conversation(ctx)
     const owner = { session, options: { provider: MODEL, model: MODEL } } as Agent
@@ -118,7 +115,7 @@ describe('automatic compaction failure bracket under the compaction invariant', 
     const end = events.find(event => event.type === 'compaction/end')
     expect(start?.data.turn).toBe(5)
     expect(end?.data.turn).toBe(5)
-    expect(end?.data.error).toContain(`no context capacity for ${MODEL}/${MODEL}`)
+    expect(end?.data.error).toContain('model route unavailable')
 
     // The clause the pre-rc.1 patch violated: a turn boundary may not cross an
     // open bracket, so a session carrying an orphaned start poisons its own
