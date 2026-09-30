@@ -18,16 +18,17 @@ async function expectFailure(operation: Promise<unknown>, code: string): Promise
   await expect(operation).rejects.toMatchObject({ code })
 }
 
-function controllerAgents(overrides: object = {}): ApiSessionAgentController {
+function controllerAgents(extra: object = {}): ApiSessionAgentController {
+  // Fork creates its child Agent directly rather than through the controller,
+  // so it has to hand the handle back for retention explicitly. An unretained
+  // child would later refuse its own deletion as a foreign Agent.
+  // (Kept outside the cast below so upstream's cast fingerprint is unchanged.)
+  const overrides = { retain: (handle: AgentHandle) => handle.agent, ...extra }
   return {
     ensureSession: () => Promise.resolve(),
     composeAgent: () => Promise.resolve({ setup: () => {} }),
     presetForSession: () => undefined,
     presetForObservation: () => undefined,
-    // Fork creates its child Agent directly rather than through the controller,
-    // so it has to hand the handle back for retention explicitly. An unretained
-    // child would later refuse its own deletion as a foreign Agent.
-    retain: (handle: AgentHandle) => handle.agent,
     ...overrides,
   } as unknown as ApiSessionAgentController
 }

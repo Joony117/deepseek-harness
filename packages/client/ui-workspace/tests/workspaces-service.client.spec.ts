@@ -162,6 +162,8 @@ class FakeSessions implements ISessions {
   declare readonly scopeOf: ISessions['scopeOf']
   declare readonly sessionOf: ISessions['sessionOf']
   declare readonly binding: ISessions['binding']
+  // Fork: ISessions gained delete (fork a); this suite never deletes.
+  declare readonly delete: ISessions['delete']
 
   constructor(initial: SessionListState) {
     this.list = new MutableSource(initial)
