@@ -303,6 +303,19 @@ describe('manifest resolution', () => {
     ])
   })
 
+  it('throws for a denied row under DSH_STRICT_STARTUP=1 and still admits an exempted one (fork)', () => {
+    const f = fixture()
+    f.plugin('denied-plugin', { peer: '^9.0.0' })
+    const base = pathToFileURL(f.dir).href + '/'
+    const rows = [{ id: 'row', name: 'denied-plugin' }]
+    vi.stubEnv('DSH_STRICT_STARTUP', '1')
+    onTestFinished(() => { vi.unstubAllEnvs() })
+    expect(() => prepareProfileEntries(context(f), rows, base))
+      .toThrow(/^strict startup: profile plugin row "row" is incompatible: Plugin denied-plugin@1\.0\.0 /)
+    f.exemptions({ 'denied-plugin@1.0.0': [runtime] })
+    expect(prepareProfileEntries(context(f), rows, base)).toEqual(rows)
+  })
+
   it('denies a group-shaped row and clears its group flag', () => {
     const f = fixture()
     f.plugin('denied-plugin', { peer: '^9.0.0' })
