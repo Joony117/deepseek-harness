@@ -646,6 +646,19 @@ describe('auditStartupEntries', () => {
     }
   })
 
+  it('rejects an optional failure when DSH_STRICT_STARTUP=1 (fork)', async () => {
+    const warn = vi.fn()
+    vi.stubEnv('DSH_STRICT_STARTUP', '1')
+    try {
+      await expect(auditStartupEntries(ctxWith([
+        { fiber: fiber(3, new Error('todo apply failure')), options: { id: 'tool-todo', name: './todo.mjs' } },
+      ]), NAME, warn)).rejects.toThrow('  tool-todo (required)\n    Package: ./todo.mjs')
+      expect(warn).not.toHaveBeenCalled()
+    } finally {
+      vi.unstubAllEnvs()
+    }
+  })
+
   it('preserves nested activation causes and aggregate member failures', async () => {
     const warn = vi.fn()
     const original = new Error('tool discovery failed')

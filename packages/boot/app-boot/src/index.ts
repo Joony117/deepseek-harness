@@ -915,6 +915,7 @@ function startupDiagnostic(binName: string, failures: readonly InactiveEntry[], 
  * Required ids absent from the tree, and disabled required entries, are ignored.
  * A throwing disabled expression is an entry failure, not a disabled entry.
  * The bootstrap Include must activate so unreadable or invalid root config is fatal.
+ * Fork: `DSH_STRICT_STARTUP=1` treats every inactive entry as required (the rc.3 policy).
  * @param ctx - the settled context whose Loader entries to audit.
  * @param binName - the prefix on startup diagnostics.
  * @param warn - sink for optional-entry warnings.
@@ -928,7 +929,8 @@ export async function auditStartupEntries(
   warn: (line: string) => void = line => void process.stderr.write(line),
 ): Promise<void> {
   const failures = await inactiveEntries(ctx)
-  const required = new Set(failures.filter(({ entry }) => entry === bootstrapIncludes.get(ctx)
+  const strict = process.env.DSH_STRICT_STARTUP === '1'
+  const required = new Set(failures.filter(({ entry }) => strict || entry === bootstrapIncludes.get(ctx)
     || requiredStartupEntryIds.has(entry.options.id)).map(({ entry }) => entry))
   if (required.size > 0) {
     throw new StartupError(startupDiagnostic(binName, failures, required), failures.map(({ entry, outcome }) => ({
