@@ -25,6 +25,7 @@ export type {
 export {
   SessionAlreadyExistsError,
   SessionAlreadyOwnedError,
+  SessionDeleteConflictError,
   SessionFormatUnsupportedError,
   SessionHandleClosedError,
   SessionOwnershipLostError,
@@ -33,7 +34,7 @@ export {
   SessionReadOnlyError,
   sessionFormatVersionRefusal,
 } from './errors.ts'
-export type { SessionLocation } from './errors.ts'
+export type { SessionDeleteConflict, SessionLocation } from './errors.ts'
 export {
   assertContiguous,
   assertStoredId,
@@ -199,6 +200,44 @@ export abstract class SessionPersistence extends Service {
    * @returns one snapshot per stored session.
    */
   abstract list(options?: SessionPersistenceListOptions): Promise<readonly SessionPersistenceSnapshot[]>
+
+  /**
+   * Whether this backend can durably remove a stored session. A backend that
+   * declares `true` must override {@link delete}.
+   *
+   * Deletion is optional because absence is a postcondition not every medium can
+   * honor: an append-only or write-once store can stop serving a log but cannot
+   * promise the bytes are gone. Declaring the capability falsely would let a
+   * frontend report a durable deletion that never happened.
+   */
+  readonly supportsDeletion: boolean = false
+
+  /**
+   * Durably remove one session and everything this backend keeps for it.
+   * Resolving means the artifact is gone.
+   *
+   * Removing an identity with no stored artifact SUCCEEDS: the postcondition is
+   * absence, so retrying a partially-applied delete can reach a clean end state.
+   * Callers test {@link supportsDeletion} first.
+   *
+   * Implementations MUST refuse while the identity is still claimed — any write
+   * ownership (a live handle, a create or write open still constructing, another
+   * process's lease) or an in-flight read — and MUST hold write ownership for the
+   * whole removal, so no `create` or write `open` can materialize the identity
+   * mid-delete. Only a write handle can publish bytes, so that claim is also what
+   * keeps a capability admitted before the deletion from recreating the log. A
+   * fresh explicit create MAY reuse the id afterwards as a new incarnation.
+   * @param _id - the persisted session to remove.
+   * @param signal - optional cancellation, honored before the removal starts.
+   * @throws {SessionDeleteConflictError} while the identity is still claimed.
+   * @throws when this backend does not support deletion.
+   */
+  delete(_id: SessionId, signal?: AbortSignal): Promise<void> {
+    if (signal?.aborted === true) {
+      return Promise.reject(signal.reason instanceof Error ? signal.reason : new Error('aborted'))
+    }
+    return Promise.reject(new Error('this session persistence backend does not support deletion'))
+  }
 }
 
 export default SessionPersistence

@@ -4,7 +4,8 @@ import { mkdir } from 'node:fs/promises'
 import type { Context } from '@deepseek-ai/cordis'
 import { installModelSelection } from '@deepseek-ai/dsh-agent'
 import type {
-  Agent, AgentOptions, AgentSetup, ModelSelection as AgentModelSelection, ModelSelectionRef,
+  Agent, AgentHandle, AgentOptions, AgentSetup, ModelSelection as AgentModelSelection,
+  ModelSelectionRef,
 } from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-agent-default-model'
 import type {} from '@deepseek-ai/dsh-agent-preset-registry'
@@ -14,7 +15,7 @@ import type { SessionInspection } from '@deepseek-ai/dsh-session-persistence'
 import { SessionQueryError, type SessionObservation } from '@deepseek-ai/dsh-session-query'
 import { RemoteError } from '@deepseek-ai/dsh-typert-protocol'
 import type {} from '@deepseek-ai/dsh-typert-registry'
-import type { ModelSelection } from './types.ts'
+import type { ModelSelection, SessionDeleteRefusal } from './types.ts'
 
 /** Cold Session identity absent from persistence. */
 export class ApiSessionNotFound extends Error {}
@@ -103,6 +104,40 @@ export function apiSessionSubagentOwnershipError(sessionId: SessionId): ApiSessi
 }
 
 /**
+ * Build the stable caller-facing refusal for an identity a deletion currently owns.
+ *
+ * This one IS a routing error: the caller asked to activate a Session, and the
+ * answer is "not right now". Deletion's own refusals use the delete-domain
+ * codes instead, so `busy` never masquerades as `you may not delete this`.
+ * @param sessionId - identity a durable deletion currently holds.
+ * @returns the caller-facing activation refusal.
+ */
+export function apiSessionDeletionBusyError(sessionId: SessionId): ApiSessionAgentError {
+  return new RemoteError(
+    'session/agent-busy',
+    `session "${sessionId}" is being deleted`,
+    { reason: 'a deletion holds this session lifecycle' },
+  )
+}
+
+/**
+ * Build the stable caller-facing refusal for a Session this Host cannot durably delete.
+ * @param sessionId - identity whose deletion was refused.
+ * @param reason - the deletion-domain condition that refused it.
+ * @returns the caller-facing delete refusal.
+ */
+export function apiSessionDeleteUnavailable(
+  sessionId: SessionId,
+  reason: SessionDeleteRefusal,
+): RemoteError<'session/delete-unavailable'> {
+  return new RemoteError(
+    'session/delete-unavailable',
+    `session "${sessionId}" cannot be deleted while it is open or persistence work is in flight; retry once it settles, or restart the harness if it stays open`,
+    { sessionId, reason },
+  )
+}
+
+/**
  * Inspect one cold Session without repairing, resuming, or publishing it.
  * @param ctx - Host context carrying Session persistence.
  * @param sessionId - durable Session identity.
@@ -142,9 +177,27 @@ export class ApiSessionAgentController {
   private readonly creations = new Map<SessionId, Promise<Agent>>()
   private readonly selections = new WeakMap<Agent, InstalledSelection>()
   private readonly imageAdmissionChains = new WeakMap<Agent, Promise<void>>()
+  /**
+   * The `AgentHandle` for every lifecycle THIS service started. `ctx.agents.get`
+   * hands back a bare Agent and the registry has no dispose-by-id, so a Session
+   * this service did not activate cannot be torn down here - that is a refusal,
+   * not a reason to reach into someone else's Agent scope. Compared by exact
+   * Agent so a stale entry can never dispose a newer lifecycle.
+   */
+  private readonly handles = new Map<SessionId, AgentHandle>()
+  /** Ids inside a durable deletion; activation is refused while the id is present. */
+  private readonly deletions = new Set<SessionId>()
+  /** Lifecycles inside a requested durable deletion, whose disposal-derived removal that transaction owns. */
+  private readonly deleting = new Set<Session>()
 
   /** @param ctx - Host context carrying Agent, model, persistence, and Typert services. */
   constructor(private readonly ctx: Context) {
+    // Retention follows the exact disposed lifecycle, never store residency:
+    // the list path hydrates served Sessions into ctx.sessions, and this
+    // service owns no handle for those rows.
+    ctx.on('agent/disposed', ({ agent }) => {
+      if (this.handles.get(agent.id)?.agent === agent) this.handles.delete(agent.id)
+    })
     ctx.typert.lookups.configure('agent', async (sessionId: SessionId) => {
       const found = await this.resolveAgent(sessionId)
       if ('error' in found) throw found.error
@@ -184,6 +237,11 @@ export class ApiSessionAgentController {
     sessionId: SessionId,
     observation?: SessionObservation,
   ): Promise<ApiSessionAgentResult> {
+    // The fence check and the pending registration below share this method's
+    // synchronous prologue. That is what makes deletion safe: a deletion either
+    // observes the resume and awaits it, or the resume is refused outright.
+    // Nothing can publish in between and rebind the persistence owner.
+    if (this.deletions.has(sessionId)) return { error: apiSessionDeletionBusyError(sessionId) }
     const live = this.liveAgent(sessionId)
     if (live !== undefined) return live
     const attached = this.ctx.sessions.get(sessionId)
@@ -242,6 +300,7 @@ export class ApiSessionAgentController {
     checkPersistedIdentity: boolean,
     presetId?: string,
   ): Promise<Agent> {
+    if (this.deletions.has(sessionId)) throw apiSessionDeletionBusyError(sessionId)
     let creation = this.creations.get(sessionId)
     if (creation === undefined) {
       creation = this.createOrAdopt(sessionId, cwd, checkPersistedIdentity, presetId)
@@ -374,6 +433,107 @@ export class ApiSessionAgentController {
   }
 
   /**
+   * Retain the handle for one lifecycle this service started, so a later
+   * deletion can tear down exactly that lifecycle and nothing else.
+   * @param handle - owned handle produced by `ctx.agents.create` / `resume`.
+   * @returns the published Agent.
+   */
+  retain(handle: AgentHandle): Agent {
+    this.handles.set(handle.agent.id, handle)
+    return handle.agent
+  }
+
+  /**
+   * Raise the deletion fence for one identity and settle whatever activation
+   * began before it. Only awaits an activation that is actually in flight: an
+   * unconditional await would push the deletion's first persistence read past a
+   * caller that aborts synchronously, and cancellation must still be seen there.
+   *
+   * A second deletion of an identity this fence already holds is refused here,
+   * before it takes any ownership. The fence is one entry per id, so two
+   * overlapping transactions would share it and whichever settled first would
+   * lower it while the other was still running - create and resume admission
+   * would start passing again mid-deletion. Throwing is what keeps the
+   * incumbent's fence intact: `SessionCommands.delete` awaits this BEFORE its
+   * `try`, so a refused contender never reaches the `finally` that calls
+   * {@link endDeletion} and cannot clear a fence it does not own.
+   *
+   * The refusal is delete-domain, not the `session/agent-busy` routing code:
+   * the caller asked to delete, and "someone else is already deleting this" is
+   * an answer about deleting. Only activation - create and resume - gets `busy`.
+   * @param sessionId - identity whose deletion is starting.
+   * @throws RemoteError<'session/delete-unavailable'> with reason `deleting` when a deletion already holds this identity.
+   */
+  async beginDeletion(sessionId: SessionId): Promise<void> {
+    if (this.deletions.has(sessionId)) throw apiSessionDeleteUnavailable(sessionId, 'deleting')
+    this.deletions.add(sessionId)
+    // A resume and a create are registered separately and can both be in
+    // flight for one id; either could publish a lifecycle after the removal.
+    const pending = [this.resumes.get(sessionId), this.creations.get(sessionId)]
+      .filter(activation => activation !== undefined)
+    if (pending.length > 0) await Promise.allSettled(pending)
+  }
+
+  /**
+   * Lower the deletion fence and release the removal-event ownership it took.
+   * A failed deletion must leave neither a permanently suppressed row nor a
+   * permanently removed one, so this runs in the transaction's `finally`.
+   * @param sessionId - identity whose deletion has settled.
+   * @param owned - the exact lifecycle this transaction disposed, when it disposed one.
+   */
+  endDeletion(sessionId: SessionId, owned: Session | undefined): void {
+    this.deletions.delete(sessionId)
+    if (owned !== undefined) this.deleting.delete(owned)
+  }
+
+  /**
+   * Whether a durable deletion owns this exact lifecycle's removal event.
+   * Keyed on the Session object rather than its id: an id can be reused by a
+   * later incarnation, and that incarnation's disposal is not this one's.
+   * @param session - the disposed lifecycle.
+   * @returns whether a delete transaction will publish the removal itself.
+   */
+  ownsRemoval(session: Session): boolean {
+    return this.deleting.has(session)
+  }
+
+  /**
+   * Resolve the retained handle that may tear down one live Agent.
+   * @param agent - the live Agent standing on the identity being deleted.
+   * @returns the owned handle, or the deletion-domain reason it cannot be used.
+   */
+  disposableHandle(agent: Agent): AgentHandle | 'foreign-agent' | 'stale-handle' {
+    const handle = this.handles.get(agent.id)
+    if (handle === undefined) return 'foreign-agent'
+    return handle.agent === agent ? handle : 'stale-handle'
+  }
+
+  /**
+   * Take ownership of one lifecycle's removal event, then dispose it. Marking
+   * precedes disposal because `session/disposed` is dispatched inside it.
+   * @param handle - retained handle for the exact lifecycle being retired.
+   * @returns the disposed Session, so the caller can release ownership in its `finally`.
+   * @throws whatever disposal rejects with, after releasing the mark it took.
+   */
+  async disposeForDeletion(handle: AgentHandle): Promise<Session> {
+    const session = handle.agent.session
+    this.deleting.add(session)
+    try {
+      await handle.dispose()
+    } catch (error) {
+      // Only this method ever names the Session: the caller learns it from the
+      // return value, so a rejection leaves its `finally` holding `undefined`
+      // and unable to release anything. An unreleased mark is permanent - it
+      // suppresses every later `session/disposed` for this lifecycle, and the
+      // row can then never be removed - so the mark is released here instead.
+      this.deleting.delete(session)
+      throw error
+    }
+    this.handles.delete(session.id)
+    return session
+  }
+
+  /**
    * Resolve the preset id and pre-publication Agent setup for a create or resume.
    * @param presetId - requested preset or the configured default when omitted.
    * @returns the resolved preset identity and Agent setup callback.
@@ -434,11 +594,11 @@ export class ApiSessionAgentController {
     if (published !== undefined && hasApiSessionSubagentOwner(this.ctx, published, live)) {
       throw new ApiSessionSubagentOwnership(sessionId)
     }
-    return (await this.ctx.agents.resume({
+    return this.retain(await this.ctx.agents.resume({
       resumeSessionId: sessionId,
       agentOptions: this.agentOptions(),
       setup: composition.setup,
-    })).agent
+    }))
   }
 
   private async createOrAdopt(
@@ -466,11 +626,11 @@ export class ApiSessionAgentController {
         const storedPreset = this.presetForObservation(observation)
         this.assertPresetUnchanged(sessionId, presetId, storedPreset)
         const composition = await this.composeAgent(storedPreset)
-        return (await this.ctx.agents.resume({
+        return this.retain(await this.ctx.agents.resume({
           resumeSessionId: sessionId,
           agentOptions: this.agentOptions(),
           setup: composition.setup,
-        })).agent
+        }))
       } catch (error: unknown) {
         if (!(error instanceof SessionQueryError)
           || error.code !== 'SESSION_QUERY_SESSION_NOT_FOUND') throw error
@@ -483,7 +643,7 @@ export class ApiSessionAgentController {
       throw new Error(`failed to ensure project directory "${cwd}": ${String(error)}`, { cause: error })
     }
     const composition = await this.composeAgent(presetId)
-    return (await this.ctx.agents.create({
+    return this.retain(await this.ctx.agents.create({
       sessionId,
       agentOptions: this.agentOptions(),
       meta: {
@@ -491,7 +651,7 @@ export class ApiSessionAgentController {
         ...(composition.agentPreset === undefined ? {} : { agentPreset: composition.agentPreset }),
       },
       setup: composition.setup,
-    })).agent
+    }))
   }
 
   private agentOptions(): AgentOptions {

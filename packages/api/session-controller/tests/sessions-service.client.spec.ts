@@ -994,6 +994,65 @@ describe('fork', () => {
   })
 })
 
+describe('delete', () => {
+  it('forwards the identity and leaves the row to the Host authoritative removal', async ({ bench }) => {
+    const b = bench()
+    await feedList(b, [{ id: 's1' }, { id: 's2' }])
+    b.mock.remote.session.delete.mockResolvedValue(ok({ deleted: true as const }))
+
+    await expect(b.svc.delete(sid('s1'))).resolves.toEqual({ ok: true, value: { deleted: true } })
+
+    expect(b.mock.remote.session.delete).toHaveBeenCalledTimes(1)
+    expect(b.mock.remote.session.delete.mock.calls[0]?.[0]).toEqual({ sessionId: 's1' })
+    // Success is NOT the client's cue to remove: the Host publishes
+    // `api-session/removed` after durable absence, and that is the one path.
+    await Promise.resolve()
+    expect(b.svc.list.getSnapshot().ids).toEqual(['s1', 's2'])
+
+    b.svc.handleSessionRemoved(sid('s1'))
+    await Promise.resolve()
+    expect(b.svc.list.getSnapshot().ids).toEqual(['s2'])
+  })
+
+  it('keeps the refused row visible and neither removes nor refreshes it', async ({ bench }) => {
+    const b = bench()
+    await feedList(b, [{ id: 's1' }])
+    const listCalls = b.mock.remote.session.list.mock.calls.length
+    b.mock.remote.session.delete.mockResolvedValue(err(new RemoteError(
+      'session/delete-unavailable',
+      'session "s1" cannot be deleted while it is open',
+      { sessionId: sid('s1'), reason: 'running' },
+    )))
+
+    const result = await b.svc.delete(sid('s1'))
+
+    expect(result.ok).toBe(false)
+    expect(result.ok ? undefined : result.error).toMatchObject({
+      code: 'session/delete-unavailable',
+      details: { reason: 'running' },
+    })
+    await Promise.resolve()
+    // The surviving session stays visible, and no recovery refresh was issued:
+    // a refresh would be recovery, not the fence.
+    expect(b.svc.list.getSnapshot().ids).toEqual(['s1'])
+    expect(b.mock.remote.session.list.mock.calls).toHaveLength(listCalls)
+  })
+
+  it('relays the Host error against the still-listed session', async ({ bench }) => {
+    const b = bench()
+    await feedList(b, [{ id: 's1' }])
+    const reference = b.svc.retain(sid('s1'), { source: 'controllerOperation' })
+    await reference.ready
+    const session = reference.binding.session
+
+    b.svc.handleSessionError(sid('s1'), 'failed to delete session "s1": read-only volume')
+
+    expect(b.svc.list.getSnapshot().ids).toEqual(['s1'])
+    expect(session.getSnapshot().lastAgentError).toContain('read-only volume')
+    reference.release()
+  })
+})
+
 describe('catalog arrival', () => {
   it('keeps a retained binding alive without a catalog row after Host removal', async ({ bench }) => {
     const b = bench()

@@ -4,7 +4,7 @@ import type { SubagentAddress } from '@deepseek-ai/dsh-subagent/client'
 import { SessionSeq, type SessionId } from '@deepseek-ai/dsh-session/types'
 import { workspaceTitleOf } from '@deepseek-ai/dsh-util-workspace-path'
 import type { WorkspaceId } from '@deepseek-ai/dsh-workspace/types'
-import { SESSION_SEARCH_RESULT_LIMIT } from '../../types.ts'
+import { SESSION_SEARCH_RESULT_LIMIT, type SessionDeleteValue } from '../../types.ts'
 import type { SessionProjectionMap } from '@deepseek-ai/dsh-session-projection/types'
 import {
   createSnapshotStore, notifySubscribers, type ObservableSnapshot, type SnapshotStore,
@@ -470,6 +470,23 @@ export class ClientSessions implements ISessions {
       if (!renamed.ok) throw new Error(`fork child rename failed: ${renamed.error.code}: ${renamed.error.message}`)
     }
     return childId
+  }
+
+  /**
+   * Durably delete one Session on the Host.
+   *
+   * Pure pass-through by design. The Host publishes `api-session/removed` only
+   * after the backend confirms durable absence, and that event is the single
+   * authoritative removal path ({@link ClientSessions.handleSessionRemoved});
+   * a second local removal here would make a refused or failed delete
+   * disappear a session that still exists. No failure-path refresh either:
+   * that is recovery, not the fence.
+   * @param sessionId - Session identity to remove durably.
+   * @param signal - cancellation for the durable delete.
+   * @returns the Host acknowledgement, or the refusal/backend failure.
+   */
+  delete(sessionId: SessionId, signal?: AbortSignal): Promise<RemoteResult<SessionDeleteValue>> {
+    return this.manager.delete(sessionId, signal)
   }
 
   /**

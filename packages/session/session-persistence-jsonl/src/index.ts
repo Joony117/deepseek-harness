@@ -14,7 +14,7 @@ import {
   sessionFormatCatalog,
 } from '@deepseek-ai/dsh-session-format-catalog'
 import { readdirSync, type Dirent } from 'node:fs'
-import { open, mkdir, readdir, realpath, link, rm, stat, truncate } from 'node:fs/promises'
+import { open, mkdir, readdir, realpath, link, lstat, rm, stat, truncate } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import { performance } from 'node:perf_hooks'
 import { scheduler } from 'node:timers/promises'
@@ -22,7 +22,7 @@ import { createHash, randomBytes } from 'node:crypto'
 import {
   SessionPersistence, SessionPersistenceRevision, SessionFormatUnsupportedError,
   SessionPersistenceCorruptionError,
-  SessionAlreadyExistsError, SessionPersistenceNotFoundError,
+  SessionAlreadyExistsError, SessionAlreadyOwnedError, SessionDeleteConflictError, SessionPersistenceNotFoundError,
   assertStoredId, materializeCreateHeader, sessionFormatVersionRefusal, validateStoredEvents,
   type SessionAccess, type SessionHandle,
   type SessionHandleReadResult,
@@ -506,6 +506,102 @@ class JsonlSessionPersistence extends SessionPersistence {
     }
     signal?.throwIfAborted()
     return snapshots
+  }
+
+  override readonly supportsDeletion = true
+
+  /**
+   * Durably delete one stored session directory; see the seam contract.
+   * Absence is the postcondition, so an id with no stored generation succeeds.
+   * @param id - the stored session to remove.
+   * @param signal - optional cancellation, honored until the first removal.
+   * @throws {SessionDeleteConflictError} while a writer or reader claims the id.
+   */
+  override async delete(id: SessionId, signal?: AbortSignal): Promise<void> {
+    signal?.throwIfAborted()
+    await this.ensureRootEncoding()
+    signal?.throwIfAborted()
+    // The single-writer claim IS the admission fence: while delete holds it,
+    // `create` refuses with SessionAlreadyExistsError and a write `open` with
+    // SessionAlreadyOwnedError, and only a write handle can publish bytes, so
+    // nothing admitted before or during this delete can recreate the log.
+    try {
+      this.tracker.claimWrite(id)
+    } catch (error: unknown) {
+      if (error instanceof SessionAlreadyOwnedError) throw new SessionDeleteConflictError(id, 'live')
+      throw error
+    }
+    try {
+      // With the write claim held, any open handle left for the id is a
+      // reader. Readers hold no claim the tracker can refuse; one mid-scan
+      // while the directory goes would see a torn view instead of a clean miss.
+      if (this.migrationPreparations.has(id) || [...this.tracker.openHandles].some(handle => handle.id === id)) {
+        throw new SessionDeleteConflictError(id, 'loading')
+      }
+      const resolved = await this.findLog(id, signal)
+      if (resolved === undefined) return
+      const dir = dirname(resolved.currentPath)
+      // The headers prove who owns the BYTES, not what the removal TARGET is:
+      // a junction standing where the session directory should be satisfies
+      // every header check, and `rm` would unlink the link and report a removal
+      // it did not perform. Refuse instead.
+      if ((await lstat(dir)).isSymbolicLink()) throw this.linkShapedDirectory(dir)
+      let lease: SessionWriteLease
+      try {
+        // Another process's writer holds this kernel lock, and on Windows the
+        // lock is a named semaphore that never blocks directory removal.
+        lease = await this.acquireLease(id, undefined, dir)
+      } catch (error: unknown) {
+        if (error instanceof SessionAlreadyOwnedError) throw new SessionDeleteConflictError(id, 'live')
+        throw error
+      }
+      try {
+        const generations = await this.deletableGenerations(dir, id, signal)
+        signal?.throwIfAborted()
+        // Highest generation LAST: historical generations stay beside the
+        // current one and reads select the highest, so removing the current
+        // first and then failing would silently roll the session back to its
+        // pre-migration history. This order leaves either the intact current
+        // log or no generation at all.
+        for (const path of generations) await rm(path, { force: true })
+        await rm(dir, { recursive: true, force: true })
+      } finally {
+        await lease.release()
+      }
+      this.coldLogMemo.delete(id)
+    } finally {
+      this.tracker.releaseClaim(id)
+    }
+  }
+
+  /**
+   * Prove every canonical generation in one session directory names `id`
+   * before anything is removed.
+   * @param dir - the session directory `findLog` resolved.
+   * @param id - the session being deleted.
+   * @param signal - optional cancellation.
+   * @returns the generation paths, lowest version first.
+   */
+  private async deletableGenerations(dir: string, id: SessionId, signal?: AbortSignal): Promise<string[]> {
+    const generations: Array<{ readonly path: string; readonly version: number }> = []
+    for (const name of await readdir(dir)) {
+      signal?.throwIfAborted()
+      const version = parseGenerationLogFilename(name, this.compression)
+      if (version === undefined) continue
+      const path = join(dir, name)
+      // Checked before the header is read: a link would have the header read
+      // follow it out of the root, so its bytes prove nothing about this entry.
+      const entry = await lstat(path)
+      if (!entry.isFile()) throw this.irregularGeneration(path)
+      // Throws for a header naming another id or path, or a format this build cannot read.
+      const header = await this.readGenerationHeader({ sourcePath: path, sourceVersion: version, currentPath: path }, id, signal)
+      // `undefined` is NOT "no header bytes": it also means no complete first
+      // line (a torn header naming another session looks exactly like an empty
+      // file) or bytes that do not parse. Only a zero-byte file claims nobody.
+      if (header === undefined && entry.size > 0) throw this.unidentifiableHeader(path)
+      generations.push({ path, version })
+    }
+    return generations.sort((left, right) => left.version - right.version).map(generation => generation.path)
   }
 
   // --- handle-facing storage internals (package-private via the handle class below) ---
@@ -1665,6 +1761,30 @@ class JsonlSessionPersistence extends SessionPersistence {
       `session artifact ${JSON.stringify(path)} uses ${logSuffix(this.oppositeCompression())}, `
       + `but this backend is configured for compression ${JSON.stringify(this.compression)}; `
       + 'use a separate root or select the matching compression mode',
+    )
+  }
+
+  private unidentifiableHeader(path: string): Error {
+    return new Error(
+      `session artifact ${JSON.stringify(path)} has a header line that cannot be parsed, `
+      + 'so deletion cannot prove which session owns it; '
+      + 'inspect or move the artifact by hand instead of deleting it',
+    )
+  }
+
+  private irregularGeneration(path: string): Error {
+    return new Error(
+      `session artifact ${JSON.stringify(path)} is not a regular file, `
+      + 'so its header cannot prove which session owns it; '
+      + 'inspect or move the artifact by hand instead of deleting it',
+    )
+  }
+
+  private linkShapedDirectory(path: string): Error {
+    return new Error(
+      `session directory ${JSON.stringify(path)} is a link rather than a real directory, `
+      + 'so removing it would report a deletion it did not perform; '
+      + 'inspect or move the artifact by hand instead of deleting it',
     )
   }
 

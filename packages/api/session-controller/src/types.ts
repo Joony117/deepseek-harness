@@ -224,6 +224,11 @@ declare module '@deepseek-ai/dsh-typert-protocol' {
     'session/steer-unavailable': { readonly itemId: MessageId }
     'session/title-invalid': { readonly sessionId: SessionId }
     'session/fork-unavailable': { readonly sessionId: SessionId }
+    'session/delete-unavailable': {
+      readonly sessionId: SessionId
+      readonly reason: SessionDeleteRefusal
+    }
+    'session/delete-unsupported': { readonly sessionId: SessionId }
     'subagent/not-found': {
       readonly parentSessionId: SessionId
       readonly childSessionId: SessionId
@@ -327,6 +332,35 @@ export interface SessionForkRequest {
 /** Identity of a newly forked Session. */
 export interface SessionForkValue {
   readonly sessionId: SessionId
+}
+
+/**
+ * Why one durable Session deletion was refused. Deletion-domain, deliberately
+ * NOT the `session/agent-busy` routing reason: a caller must be able to tell
+ * "this session is busy" from "you may not delete this".
+ */
+export type SessionDeleteRefusal =
+  /** The Agent is mid-turn; stop it first. */
+  | 'running'
+  /** Subagent routing owns the lifecycle. */
+  | 'subagent-owned'
+  /** A live Agent this Host service never activated; its scope is not ours to tear down. */
+  | 'foreign-agent'
+  /** The retained handle no longer names the live Agent for this identity. */
+  | 'stale-handle'
+  /** Persistence still holds a claim on the identity (a write claim in any process, or an in-flight read). */
+  | 'persistence-conflict'
+  /** Another delete transaction already holds this identity's fence. */
+  | 'deleting'
+
+/** Durable Session deletion request. */
+export interface SessionDeleteRequest {
+  readonly sessionId: SessionId
+}
+
+/** Acknowledgement that the durable artifact is gone. */
+export interface SessionDeleteValue {
+  readonly deleted: true
 }
 
 /** Session prompt request. */

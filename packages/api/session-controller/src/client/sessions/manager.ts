@@ -7,6 +7,7 @@ import type { WorkspaceId } from '@deepseek-ai/dsh-workspace/types'
 import type {
   SessionControlBaseline,
   SessionControlFrame,
+  SessionDeleteValue,
   SessionProjectionHints,
   SessionRenameValue,
   SessionSummary,
@@ -562,6 +563,24 @@ export class SessionManager {
       this.projectionStore(sessionId).apply('title', result.value.title, SessionSeq(result.value.seq))
     }
     return result
+  }
+
+  /**
+   * Contract session.delete. Deliberately mutates NOTHING locally: the Host
+   * publishes the authoritative `api-session/removed` only once durable
+   * absence is confirmed, and that event already drives
+   * {@link SessionManager.handleSessionRemoved}. A refusal or a backend
+   * failure must leave the surviving row visible, so there is no failure-path
+   * refresh either - that would be recovery, not the fence.
+   * @param sessionId - Session identity to remove durably.
+   * @param signal - cancellation for the durable delete.
+   * @returns the Host acknowledgement, or the refusal/backend failure.
+   */
+  delete(
+    sessionId: SessionId,
+    signal?: AbortSignal,
+  ): Promise<RemoteResult<SessionDeleteValue>> {
+    return this.remote.session.delete({ sessionId }, signal)
   }
 
   /**

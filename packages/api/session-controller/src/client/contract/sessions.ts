@@ -12,6 +12,7 @@ import type { RemoteResult } from '@deepseek-ai/dsh-typert-protocol'
 import type { AgentContext } from '../scope.ts'
 import type { SessionSearchResultItem } from '../sessions/manager.ts'
 import type { SessionBinding, SessionListState } from '../sessions/service.ts'
+import type { SessionDeleteValue } from '../../types.ts'
 import type { SessionFace } from './session.ts'
 import type { ObservableSnapshot } from '@deepseek-ai/dsh-client-store'
 import type { SessionReferenceSource } from '../index.ts'
@@ -135,6 +136,20 @@ export interface ISessions {
     increaseTitle?: boolean
     onCreated?: (childId: SessionId) => void
   }): Promise<SessionId>
+
+  /**
+   * Durably delete one Session on the Host.
+   *
+   * The row survives until the Host confirms durable absence: on a refusal or a
+   * backend failure the failure is returned and the still-listed Session is
+   * left exactly as it was, with the Host's own `api-session/error` against it.
+   * Removal arrives only through the authoritative `api-session/removed`, so
+   * this never removes the row itself and never refreshes on failure.
+   * @param sessionId - Session identity to remove durably.
+   * @param signal - cancellation for the durable delete.
+   * @returns the Host acknowledgement, or the refusal/backend failure.
+   */
+  delete(sessionId: SessionId, signal?: AbortSignal): Promise<RemoteResult<SessionDeleteValue>>
   /**
    * Borrow an already-retained Agent-scoped Context without extending its lifetime.
    * @param id - session id.

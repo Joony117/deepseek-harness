@@ -24,6 +24,10 @@ function controllerAgents(overrides: object = {}): ApiSessionAgentController {
     composeAgent: () => Promise.resolve({ setup: () => {} }),
     presetForSession: () => undefined,
     presetForObservation: () => undefined,
+    // Fork creates its child Agent directly rather than through the controller,
+    // so it has to hand the handle back for retention explicitly. An unretained
+    // child would later refuse its own deletion as a foreign Agent.
+    retain: (handle: AgentHandle) => handle.agent,
     ...overrides,
   } as unknown as ApiSessionAgentController
 }
@@ -288,6 +292,28 @@ describe('Session fork failures', () => {
     const options = create.mock.calls[0]?.[0]
     if (options === undefined) throw new Error('Agent creation was not attempted')
     expect(options.meta?.agentPreset).toBe('minimal')
+    await ctx.fiber.dispose()
+  })
+
+  it('retains the forked child so it can later delete itself', async () => {
+    const ctx = await baseContext()
+    ctx.provide('workspaceRegistry', { list: () => [] } as never)
+    const source = completedSession(ctx, 'retained-source', '/workspace')
+    vi.spyOn(ctx.agents, 'create').mockImplementation(
+      (options: CreateAgentOptions) => Promise.resolve(resolvedHandle(ctx, options.sessionId)),
+    )
+    // Fork bypasses the controller's own create/resume path, so retention here
+    // is a separate call that is easy to omit. It is not cosmetic: deletion
+    // refuses any live Agent this service holds no handle for, so an unretained
+    // child would be undeletable until the harness restarted.
+    const retained: AgentHandle[] = []
+    const controller = new SessionCommandController(ctx, controllerAgents({
+      retain: (handle: AgentHandle) => { retained.push(handle); return handle.agent },
+    }), '/default')
+
+    const forked = await controller.fork({ sessionId: source.id })
+
+    expect(retained.map(handle => handle.agent.id)).toEqual([forked.sessionId])
     await ctx.fiber.dispose()
   })
 })

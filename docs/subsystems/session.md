@@ -885,6 +885,16 @@ workspaceDesktop(): { name: string; available: boolean; fileManager: 'finder' | 
 @Remote('fork') fork(request: SessionForkRequest): Promise<SessionForkValue>
 
 /**
+ * Durably delete one Session after releasing any lifecycle this Host owns.
+ * The client-facing row survives until the backend confirms absence: a
+ * refusal or a backend failure leaves it visible, with an error.
+ * @param request - Session identity to remove.
+ * @param signal - caller cancellation for the persistence delete.
+ * @returns acknowledgement that the durable artifact is gone.
+ */
+@Remote('delete') delete(request: SessionDeleteRequest, signal: AbortSignal): Promise<SessionDeleteValue>
+
+/**
  * Admit one prompt after explicitly resuming its Session.
  * @param request - Session identity, prompt content, source metadata, and delivery mode.
  * @param signal - caller cancellation before prompt admission begins.

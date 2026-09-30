@@ -408,6 +408,28 @@ abstract stat(id: SessionId, options?: SessionPersistenceStatOptions): Promise<S
  * @returns one snapshot per stored session.
  */
 abstract list(options?: SessionPersistenceListOptions): Promise<readonly SessionPersistenceSnapshot[]>
+
+/**
+ * Durably remove one session and everything this backend keeps for it.
+ * Resolving means the artifact is gone.
+ *
+ * Removing an identity with no stored artifact SUCCEEDS: the postcondition is
+ * absence, so retrying a partially-applied delete can reach a clean end state.
+ * Callers test {@link supportsDeletion} first.
+ *
+ * Implementations MUST refuse while the identity is still claimed — any write
+ * ownership (a live handle, a create or write open still constructing, another
+ * process's lease) or an in-flight read — and MUST hold write ownership for the
+ * whole removal, so no `create` or write `open` can materialize the identity
+ * mid-delete. Only a write handle can publish bytes, so that claim is also what
+ * keeps a capability admitted before the deletion from recreating the log. A
+ * fresh explicit create MAY reuse the id afterwards as a new incarnation.
+ * @param _id - the persisted session to remove.
+ * @param signal - optional cancellation, honored before the removal starts.
+ * @throws {SessionDeleteConflictError} while the identity is still claimed.
+ * @throws when this backend does not support deletion.
+ */
+delete(_id: SessionId, signal?: AbortSignal): Promise<void>
 ```
 
 Types: [SessionId](core.md)

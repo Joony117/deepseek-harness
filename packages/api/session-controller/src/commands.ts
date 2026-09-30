@@ -17,7 +17,10 @@ import {
 import type { MessageSource } from '@deepseek-ai/dsh-llm'
 import { buildForkSeed } from '@deepseek-ai/dsh-session/fork'
 import { SessionLogOffset, SessionSeq } from '@deepseek-ai/dsh-session'
-import type { SessionEvent, SessionHeader, SessionId, UserMessage } from '@deepseek-ai/dsh-session'
+import type {
+  Session, SessionEvent, SessionHeader, SessionId, UserMessage,
+} from '@deepseek-ai/dsh-session'
+import type { SessionDeleteConflictError } from '@deepseek-ai/dsh-session-persistence'
 import { SessionQueryError, type SessionObservation } from '@deepseek-ai/dsh-session-query'
 import { SessionTitleInvalidError } from '@deepseek-ai/dsh-session-title'
 import { canonicalClientTimeZone } from '@deepseek-ai/dsh-util-time'
@@ -30,6 +33,7 @@ import {
   ApiSessionNotFound,
   ApiSessionPresetConflict,
   ApiSessionSubagentOwnership,
+  apiSessionDeleteUnavailable,
   apiSessionSubagentOwnershipError,
   hasApiSessionSubagentOwner,
   inspectApiSession,
@@ -41,6 +45,8 @@ import type {
   SessionCancelValue,
   SessionCreateRequest,
   SessionCreateValue,
+  SessionDeleteRequest,
+  SessionDeleteValue,
   SessionForkRequest,
   SessionForkValue,
   SessionPromptRequest,
@@ -267,7 +273,9 @@ export class SessionCommandController {
     const composition = await this.agents.composeAgent(this.agents.presetForObservation(source))
     try {
       const { provider, model } = this.ctx.agentDefaultModel.currentSelection()
-      await this.ctx.agents.create({
+      // Retained like every other lifecycle this service starts: an unretained
+      // child would refuse its own deletion as a foreign Agent.
+      this.agents.retain(await this.ctx.agents.create({
         sessionId: childId,
         seed,
         inheritedEventCount: SessionLogOffset(boundary + 1),
@@ -281,7 +289,7 @@ export class SessionCommandController {
         },
         agentOptions: { provider, model },
         setup: composition.setup,
-      })
+      }))
     } catch (error) {
       throw new RemoteError(
         'gateway/internal',
@@ -301,6 +309,79 @@ export class SessionCommandController {
       }
     }
     return { sessionId: childId }
+  }
+
+  /**
+   * Durably delete one detached persisted Session, or one attached but idle
+   * Session whose Agent lifecycle this service owns - that lifecycle is disposed
+   * first so the persistence owner is released, with no restart.
+   *
+   * The transaction OWNS this lifecycle's client-facing removal event. Disposal
+   * is a lifecycle transition, not proof the durable log is gone, so the
+   * disposal-derived `api-session/removed` is suppressed and the authoritative
+   * one is published only after the backend confirms absence. A refusal or a
+   * backend failure therefore leaves the surviving Session visible, with an
+   * error, on every connected client.
+   * @param request - Session identity to remove.
+   * @param signal - caller cancellation for the persistence delete.
+   * @returns acknowledgement that the durable artifact is gone.
+   * @throws RemoteError on refusal, unsupported backend, cancellation, or backend failure.
+   */
+  async delete(request: SessionDeleteRequest, signal: AbortSignal): Promise<SessionDeleteValue> {
+    const { sessionId } = request
+    signal.throwIfAborted()
+    // The fence goes up FIRST and comes down in `finally`. Everything after it
+    // either began before the fence - and is awaited here - or is refused by
+    // the activation guard. That is what keeps a resume from rebinding the
+    // persistence owner between the disposal below and the durable removal.
+    await this.agents.beginDeletion(sessionId)
+    let owned: Session | undefined
+    try {
+      signal.throwIfAborted()
+      // Store residency is not busyness: the list path hydrates every served
+      // Session into ctx.sessions, so `get` is true for idle rows too and
+      // guarding on it makes deletion unreachable. Refuse only in-flight work.
+      const live = this.ctx.agents.get(sessionId)
+      if (live?.status === 'running') {
+        throw apiSessionDeleteUnavailable(sessionId, 'running')
+      }
+      const attached = live?.session ?? this.ctx.sessions.get(sessionId)
+      if (attached !== undefined && hasApiSessionSubagentOwner(this.ctx, attached, live)) {
+        throw apiSessionDeleteUnavailable(sessionId, 'subagent-owned')
+      }
+      // Optional accessor, like every other persistence read here: this service
+      // does not inject the seam, and deployments without it must not fail to
+      // boot for a capability only this method needs.
+      const persistence = this.ctx.get('sessionPersistence')
+      if (persistence === undefined || !persistence.supportsDeletion) {
+        throw new RemoteError(
+          'session/delete-unsupported',
+          'this persistence backend does not support session deletion',
+          { sessionId },
+        )
+      }
+      if (live !== undefined) {
+        // Every expected refusal is now behind us, so disposal is the last
+        // reversible step. A live Agent this service did not activate keeps its
+        // refusal: disposing an Agent scope owned by someone else is not ours.
+        const handle = this.agents.disposableHandle(live)
+        if (typeof handle === 'string') throw apiSessionDeleteUnavailable(sessionId, handle)
+        signal.throwIfAborted()
+        owned = await this.agents.disposeForDeletion(handle)
+      }
+      // Agent disposal awaits its write handle's close, so the persistence
+      // write claim is already released here; this call is what proves the
+      // durable artifact is gone.
+      await persistence.delete(sessionId, signal)
+    } catch (error) {
+      throw this.rejectDeletion(sessionId, signal, error)
+    } finally {
+      this.agents.endDeletion(sessionId, owned)
+    }
+    // Authoritative removal: durable absence is confirmed, including the
+    // detached case where no Agent was ever live.
+    this.ctx.emit('api-session/removed', sessionId)
+    return { deleted: true }
   }
 
   /**
@@ -555,6 +636,32 @@ export class SessionCommandController {
     throw new RemoteError('gateway/internal', `failed to create session "${sessionId}": ${String(error)}`, {})
   }
 
+  /**
+   * Report one delete failure on the surviving row and fold it to a stable code.
+   * The row is still visible - the removal event was never published - so the
+   * client needs the error against it, not a silent no-op.
+   * @param sessionId - Session whose deletion failed.
+   * @param signal - caller cancellation observed during the attempt.
+   * @param error - the refusal, conflict, or backend failure.
+   * @returns the caller-facing failure to throw.
+   */
+  private rejectDeletion(sessionId: SessionId, signal: AbortSignal, error: unknown): RemoteError {
+    const failure = signal.aborted
+      ? new RemoteError('gateway/cancelled', 'session deletion was aborted', {})
+      : remoteErrorOf(error)
+        ?? (isSessionDeleteConflict(error)
+          ? apiSessionDeleteUnavailable(sessionId, 'persistence-conflict')
+          // A backend I/O failure after disposal is reported honestly: the
+          // durable artifact survives and reappears on the next refresh.
+          : new RemoteError(
+            'gateway/internal',
+            `failed to delete session "${sessionId}": ${String(error)}`,
+            {},
+          ))
+    this.ctx.emit('api-session/error', sessionId, failure.message)
+    return failure
+  }
+
   private async readSessionState(sessionId: SessionId): Promise<SessionReadState> {
     const attached = this.ctx.sessions.get(sessionId)
     if (attached !== undefined) {
@@ -612,6 +719,25 @@ function hasPromptRequest(agent: Agent, requestId: SessionRequestId): boolean {
     return source.kind === 'user' && 'rpcId' in source && source.rpcId === requestId
   })
 }
+
+/**
+ * Recognise a persistence delete conflict without loading the package.
+ *
+ * `session-persistence` is an OPTIONAL peer of this controller, so its error
+ * class cannot be imported as a value: a static value import is evaluated when
+ * this module loads, which would turn one absent install into a load failure
+ * for every command here, not just delete. The class sets `name` in its
+ * constructor and carries `conflict` as an own field, so the pair identifies it
+ * structurally and the import stays type-only.
+ * @param error - the rejection to classify.
+ * @returns Whether it is a persistence-layer delete conflict.
+ */
+function isSessionDeleteConflict(error: unknown): error is SessionDeleteConflictError {
+  return error instanceof Error
+    && error.name === 'SessionDeleteConflictError'
+    && typeof (error as { conflict?: unknown }).conflict === 'string'
+}
+
 function imageBlockIn(
   content: unknown,
   match: (ref: ImageAttachmentRef) => boolean,
