@@ -47,6 +47,7 @@ import type {} from '@deepseek-ai/dsh-client-ui-sidebar/client'
 import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type {} from '@deepseek-ai/dsh-client-ui-layout/client'
 import type { SessionSearchResultItem } from '@deepseek-ai/dsh-api-session-controller/client'
+import type { SessionDeleteRefusal } from '@deepseek-ai/dsh-api-session-controller/types'
 import type { RemoteHostFacts } from '@deepseek-ai/dsh-api-remotes/client'
 import type { SessionActivity, WorkspaceId, WorkspaceView } from '@deepseek-ai/dsh-api-workspace-controller/client'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
@@ -135,7 +136,7 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
     /**
      * The rows of one Session's "..." menu, in ascending `order`. ui-workspace
      * registers the shipped rows here — `pin` (100), `rename` (200), `fork`
-     * (300), `archive` (400) — so a plugin row is placed by its own `order`
+     * (300), `archive` (400), `delete` (500) — so a plugin row is placed by its own `order`
      * among them. Use a package-namespaced `id`; reusing a shipped id at
      * another `priority` shadows that row. Each entry renders one
      * `role="menuitem"` `<button>` (the shipped rows use ui-primitives'
@@ -378,6 +379,47 @@ export interface SessionArchiveConfirmInjected {
   stopAndArchiveSession: (sessionId: SessionId) => Promise<void>
 }
 
+/** Delete action share: the row only raises the request; the dialog entry confirms it. */
+export interface DeleteSessionInjected {
+  /** Ask for the delete confirmation, naming the row's current title. */
+  requestSessionDelete: (sessionId: SessionId, displayTitle: string) => void
+}
+
+/** A permanent delete the delete action asked for; the dialog entry opens on it. */
+export interface SessionDeleteConfirmRequest {
+  /** Session to delete. */
+  sessionId: SessionId
+  /** The row's display title, named in the dialog. */
+  displayTitle: string
+}
+
+/**
+ * Why one delete did not durably remove the Session. A refusal is an answer,
+ * not a fault, so it resolves; the surviving row stays listed.
+ */
+export interface SessionDeleteFailure {
+  /** Host refusal code, or `unsupported` for a backend without deletion. Absent for a transport/backend failure. */
+  reason?: SessionDeleteRefusal | 'unsupported'
+  /** Diagnostic text; shown when no reason code is present. */
+  message: string
+}
+
+/** Delete dialog share: the pending request, its settlement, and the delete hop the dialog confirms with. */
+export interface SessionDeleteConfirmInjected {
+  hooks: {
+    /** The delete asked for, until the dialog consumes or cancels it. */
+    deleteRequest: HostObservable<SessionDeleteConfirmRequest | null>
+  }
+  /** Consume or cancel the pending request. */
+  settleSessionDelete: () => void
+  /**
+   * Permanently remove one Session log. Resolves `undefined` only once the Host
+   * confirms durable absence, else the failure; the Host's removal event, not
+   * this call, takes the row away.
+   */
+  deleteSession: (sessionId: SessionId) => Promise<SessionDeleteFailure | undefined>
+}
+
 /** Fork action share. */
 export interface ForkSessionInjected {
   /** Fork a Session at its last completed turn; the child arrives through the Host list. */
@@ -437,6 +479,13 @@ export type SessionArchiveConfirmProps =
   & PropsLocale<'workspace'>
   & Omit<SessionArchiveConfirmInjected, 'hooks'>
   & PropsHooks<SessionArchiveConfirmInjected['hooks']>
+
+/** Props of the delete dialog entry in `shell.overlay`. */
+export type SessionDeleteConfirmProps =
+  PropsRuntime<'shell.overlay'>
+  & PropsLocale<'workspace'>
+  & Omit<SessionDeleteConfirmInjected, 'hooks'>
+  & PropsHooks<SessionDeleteConfirmInjected['hooks']>
 
 /**
  * Props of the row toast entry in `shell.overlay`. The declared viewing store

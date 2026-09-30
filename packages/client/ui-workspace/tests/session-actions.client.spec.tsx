@@ -1,9 +1,9 @@
 // @vitest-environment jsdom
 /**
  * The shipped Session row actions rendered directly with hand-built props:
- * the pin, rename, fork, and archive menu rows, the archive and pin hover
- * buttons, and the two `shell.overlay` surfaces they raise (rename dialog,
- * row notice). Every action reads its own injected hooks and calls its own
+ * the pin, rename, fork, archive, and delete menu rows, the archive and pin hover
+ * buttons, and the `shell.overlay` surfaces they raise (rename, archive and
+ * delete dialogs, row notice). Every action reads its own injected hooks and calls its own
  * injected callbacks; what those callbacks do is apply.client.spec's
  * subject. The browser and the slot machinery stay out; the assembled
  * chain lives in rename-assembly.client.spec.
@@ -21,11 +21,12 @@ import { en as commonEn } from '@deepseek-ai/dsh-client-locale/src/locales/en.ts
 import { zh as commonZh } from '@deepseek-ai/dsh-client-locale/src/locales/zh.ts'
 import type {
   MenuOpenState, RowToast, RowToastState, SessionArchiveConfirmInjected, SessionArchiveConfirmRequest,
-  SessionRenameDialogInjected, SessionRenameTarget,
+  SessionDeleteConfirmInjected, SessionDeleteConfirmRequest, SessionRenameDialogInjected, SessionRenameTarget,
 } from '../src/client/contract/slots.ts'
 import {
   ArchiveSessionMenuItem, ArchiveSessionRowButton, SessionArchiveConfirmDialog,
 } from '../src/client/session-actions/ArchiveSession.tsx'
+import { DeleteSessionMenuItem, SessionDeleteConfirmDialog } from '../src/client/session-actions/DeleteSession.tsx'
 import { ForkSessionMenuItem } from '../src/client/session-actions/ForkSession.tsx'
 import { PinSessionMenuItem, PinSessionRowButton } from '../src/client/session-actions/PinSession.tsx'
 import { RenameSessionMenuItem, SessionRenameDialog } from '../src/client/session-actions/RenameSession.tsx'
@@ -487,6 +488,60 @@ declare module '@deepseek-ai/dsh-workspace/types' {
     probe: true
   }
 }
+
+describe('delete action (fork)', () => {
+  it('menu row is destructive, closes the menu, then requests the confirmation', () => {
+    const { state, setMenuOpen } = openMenu()
+    const requestSessionDelete = vi.fn()
+    render(<DeleteSessionMenuItem {...menuRow(state)} requestSessionDelete={requestSessionDelete} />)
+    const row = screen.getByRole('menuitem', { name: '删除会话' })
+    expect(row.className).toMatch(/danger/)
+    fireEvent.click(row)
+    expect(requestSessionDelete).toHaveBeenCalledWith(sid('one'), 'Session title')
+    expect(callOrder(setMenuOpen)).toBeLessThan(callOrder(requestSessionDelete))
+  })
+
+  /** The dialog over a test-owned request source; settling clears the request the way apply does. */
+  function deleteDialog(deleteSession: SessionDeleteConfirmInjected['deleteSession']) {
+    const request = createSnapshotStore<SessionDeleteConfirmRequest | null>(null)
+    const settleSessionDelete = vi.fn(() => { request.set(null) })
+    render(
+      <SessionDeleteConfirmDialog
+        {...overlay}
+        useDeleteRequest={bindSnapshotSelector(request)}
+        settleSessionDelete={settleSessionDelete}
+        deleteSession={deleteSession}
+      />,
+    )
+    expect(screen.queryByRole('dialog')).toBeNull()
+    act(() => { request.set({ sessionId: sid('one'), displayTitle: 'Old session' }) })
+    return { settleSessionDelete }
+  }
+
+  it('names the session, deletes on confirm, and settles once the Host accepts', async () => {
+    const deleteSession = vi.fn(async () => undefined)
+    const { settleSessionDelete } = deleteDialog(deleteSession)
+    expect(screen.getByRole('dialog').textContent).toContain('将永久删除“Old session”的会话记录')
+    fireEvent.click(screen.getByRole('button', { name: '删除会话' }))
+    expect(deleteSession).toHaveBeenCalledWith(sid('one'))
+    await waitFor(() => { expect(settleSessionDelete).toHaveBeenCalledOnce() })
+    expect(screen.queryByRole('dialog')).toBeNull()
+  })
+
+  it('keeps the dialog open on a refusal: a reason code is localized, a bare failure shows its message', async () => {
+    const deleteSession = vi.fn<SessionDeleteConfirmInjected['deleteSession']>()
+      .mockResolvedValueOnce({ reason: 'running', message: 'generic host sentence' })
+      .mockResolvedValueOnce({ message: 'disk exploded' })
+    const { settleSessionDelete } = deleteDialog(deleteSession)
+    fireEvent.click(screen.getByRole('button', { name: '删除会话' }))
+    await waitFor(() => { expect(screen.getByRole('alert').textContent).toBe('该会话正在运行，请先停止后再删除。') })
+    fireEvent.click(screen.getByRole('button', { name: '删除会话' }))
+    await waitFor(() => { expect(screen.getByRole('alert').textContent).toBe('disk exploded') })
+    expect(settleSessionDelete).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: '取消' }))
+    expect(settleSessionDelete).toHaveBeenCalledOnce()
+  })
+})
 
 describe('RowActionToast', () => {
   /** The notice surface over a test-owned notice source; dismissal clears the notice the way apply does. */
