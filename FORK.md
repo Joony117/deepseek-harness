@@ -40,7 +40,7 @@ earlier moves (rc.1 cutover, rc.3 rebase, review rounds) lives in the tracker
 | Commit | What |
 |---|---|
 | (a) session delete | `delete` on the persistence seam (JSONL backend), the session-controller `@Remote('delete')`, client `ISessions.delete`, specs |
-| (a2) delete UI | one `sidebar.workspaces.session.menu.item` (id `delete`, order 500) + a `shell.overlay` confirm dialog; drop this commit alone to ship delete as API only |
+| (a2) delete UI | one `sidebar.workspaces.session.menu.item` (id `delete`, order 450; plugin rows start at 500) + a `shell.overlay` confirm dialog; drop this commit alone to ship delete as API only |
 | (b) compaction | a failed automatic compaction is recorded; the summarizer runs with thinking off |
 | (c) CallId alias | `packages/llm/llm/src/brand.ts` |
 | (d) strict startup | `DSH_STRICT_STARTUP=1` makes every inactive Loader entry fatal in `auditStartupEntries` (rc.2 fails only for its required ids) |

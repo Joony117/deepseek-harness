@@ -14,7 +14,7 @@ import type {
 import browserCss from '../rows/WorkspaceBrowser.module.css'
 
 /**
- * Menu row (order 500): ask for the delete confirmation. Styled destructive,
+ * Menu row (order 450, before plugin rows at 500+): ask for the delete confirmation. Styled destructive,
  * unlike archive, because the log does not survive.
  * @param props - owner share, menu open state, and the delete share.
  * @returns the row.
