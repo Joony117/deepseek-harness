@@ -23,6 +23,14 @@ const SUMMARY_OPEN_TAG = '<compacted-summary>'
 const SUMMARY_CLOSE_TAG = '</compacted-summary>'
 
 /**
+ * The adapter-owned reasoning level meaning "produce no thinking". A thinking
+ * model spends the summarization output cap on reasoning before it writes a
+ * single checkpoint line, so the call finishes `max-tokens` with nothing
+ * usable; selecting this level spends the whole cap on the checkpoint instead.
+ */
+const NO_THINKING_EFFORT = 'off'
+
+/**
  * The summarization directive, delivered as the FINAL user message after the
  * replayed conversation rather than as a distinct summarizer system prompt.
  * Keeping the conversation's own system prompt, tools, and message prefix in
@@ -107,6 +115,35 @@ export type SummaryResult = {
 )
 
 /**
+ * Resolve the no-thinking reasoning level for one exact route, when that route
+ * advertises one.
+ *
+ * Call resolution rejects an effort the resolved model does not advertise, and
+ * compaction runs against every routable model — non-reasoning models and
+ * reasoning models with no `off` level included — so an unconditional request
+ * would trade a truncated checkpoint for a guaranteed failure. Capability
+ * lookup is advisory for the same reason: a context whose LLM seam is absent,
+ * doubled, or offline must summarize exactly as it did before rather than gain
+ * a new way to fail.
+ * @param ctx - context providing the LLM service.
+ * @param target - the exact provider/model this summarization will route to.
+ * @param signal - optional cancellation forwarded to capability lookup.
+ * @returns the advertised no-thinking effort, or `undefined` to leave the request untouched.
+ */
+async function noThinkingEffort(
+  ctx: Context,
+  target: { provider: string; model: string },
+  signal?: AbortSignal,
+): Promise<GenerateOptions['reasoningEffort']> {
+  try {
+    const info = await ctx.llm.resolveModelInfo(target.provider, target.model, signal)
+    return info.reasoning?.efforts.find(effort => effort.id === NO_THINKING_EFFORT)?.id
+  } catch {
+    return undefined
+  }
+}
+
+/**
  * Run the default cache-reusing `ctx.llm.stream()` summarization call: replay
  * the conversation prefix, then append the compaction instruction as the final
  * user message so the provider's warm prefix cache is reused.
@@ -149,12 +186,14 @@ export async function summarizeWithLlm(
       content: [{ type: 'text', text: COMPACTION_INSTRUCTION }],
     }),
   ]
+  const reasoningEffort = await noThinkingEffort(ctx, target, signal)
   const options: GenerateOptions = {
     provider: target.provider,
     model: target.model,
     messages,
     toolHistory: agent.session.toolHistory(),
     ...input.tools === undefined ? {} : { tools: [...input.tools] },
+    ...reasoningEffort === undefined ? {} : { reasoningEffort },
     maxTokens: config.maxTokens,
     sessionId: agent.session.id,
     purpose: 'compaction',
