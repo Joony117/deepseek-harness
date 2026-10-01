@@ -1420,9 +1420,10 @@ export class ToolRuntime extends Service {
         // Fork: plugins built for 0.1.x (dsh-plugin-subscriptions' image_generate) still defer the
         // retired `{ kind: 'plugin', plugin }` source. V4 persistence refuses it
         // (session-format-v3-to-v4 message-sources.ts) and the refused batch wedges the session log.
+        // `plugin:<name>` matches what the v3-to-v4 migration gives an unknown producer (sources.ts).
         const { kind, plugin, ...rest } = context.source as { kind: string; plugin?: unknown }
         deferredContexts.push(kind === 'plugin' && typeof plugin === 'string' && plugin.length > 0
-          ? deepFreeze({ ...context, source: { ...rest, kind: plugin } as UserMessage['source'] })
+          ? deepFreeze({ ...context, source: { ...rest, kind: `plugin:${plugin}` as string } as UserMessage['source'] })
           : context)
       },
       concludeTurn(): void {

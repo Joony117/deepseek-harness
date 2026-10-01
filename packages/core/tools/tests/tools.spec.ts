@@ -28,7 +28,7 @@ declare module '@deepseek-ai/dsh-llm' {
     'wrapper': { kind: 'wrapper' } & ContextFormed
     // Fork: the retired 0.1.x wrapper a legacy plugin still defers, and the kind it becomes.
     'plugin': { kind: 'plugin'; plugin: string } & ContextFormed
-    'dsh-plugin-subscriptions': { kind: 'dsh-plugin-subscriptions' } & ContextFormed
+    'plugin:dsh-plugin-subscriptions': { kind: 'plugin:dsh-plugin-subscriptions' } & ContextFormed
   }
 }
 
@@ -1095,10 +1095,10 @@ describe('ToolRuntime', () => {
     ])
   })
 
-  it('rewrites a deferred retired plugin source to the plugin kind and leaves other kinds alone (fork)', async () => {
+  it('rewrites a deferred retired plugin source to plugin:<name>, keeps its other fields, and leaves other kinds alone (fork)', async () => {
     const ctx = await setup()
     // A 0.1.x plugin (dsh-plugin-subscriptions' image_generate) still defers `{ kind: 'plugin', plugin }`.
-    const retired = { kind: 'plugin' as const, plugin: 'dsh-plugin-subscriptions' }
+    const retired = { kind: 'plugin' as const, plugin: 'dsh-plugin-subscriptions', form: 'instructions' as const }
     ctx.tools.register(defineContentToolFixture({
       name: 'legacy',
       description: 'legacy',
@@ -1113,7 +1113,7 @@ describe('ToolRuntime', () => {
     const result = await ctx.tools.execute({ signal: testToolSignal, callId: ToolCallId('legacy'), name: 'legacy', arguments: {} })
 
     expect(result.additionalContexts?.map(context => context.source)).toEqual([
-      { kind: 'dsh-plugin-subscriptions' },
+      { kind: 'plugin:dsh-plugin-subscriptions', form: 'instructions' },
       { kind: 'nested-1' },
     ])
     expect(result.additionalContexts?.map(context => context.content)).toEqual([
