@@ -1200,6 +1200,9 @@ export const IconSparkleMedium = (props: IconProps) => (
   <IconSparkleArtwork {...props} strokeWidth={ICON_MEDIUM_STROKE} />
 )
 
+/** Fork: 0.1.x name kept for dsh-plugin-subscriptions' client half; without it boot-client.ts reports "did not activate". */
+export const IconSparkle16 = IconSparkleRegular
+
 /** Regular one-pixel IconInspectOutline artwork. */
 export const IconInspectOutlineRegular = (props: IconProps) => (
   <CodeBracketsArtwork {...props} size={props.size ?? 12} strokeWidth={ICON_REGULAR_STROKE} />
