@@ -1092,6 +1092,33 @@ describe('ToolRuntime', () => {
     ])
   })
 
+  it('rewrites a deferred retired plugin source to the plugin kind and leaves other kinds alone (fork)', async () => {
+    const ctx = await setup()
+    // A 0.1.x plugin (dsh-plugin-subscriptions' image_generate) still defers `{ kind: 'plugin', plugin }`.
+    const retired = { kind: 'plugin', plugin: 'dsh-plugin-subscriptions' }
+    ctx.tools.register(defineContentToolFixture({
+      name: 'legacy',
+      description: 'legacy',
+      parameters: {},
+      async execute(_args, exec) {
+        exec.deferContext(createUserMessage({ content: [{ type: 'text', text: 'image' }], source: retired }))
+        exec.deferContext(createUserMessage({ content: [{ type: 'text', text: 'plain' }], source: { kind: 'nested-1' } }))
+        return [{ type: 'text', text: 'done' }]
+      },
+    }))
+
+    const result = await ctx.tools.execute({ signal: testToolSignal, callId: ToolCallId('legacy'), name: 'legacy', arguments: {} })
+
+    expect(result.additionalContexts?.map(context => context.source)).toEqual([
+      { kind: 'dsh-plugin-subscriptions' },
+      { kind: 'nested-1' },
+    ])
+    expect(result.additionalContexts?.map(context => context.content)).toEqual([
+      [{ type: 'text', text: 'image' }],
+      [{ type: 'text', text: 'plain' }],
+    ])
+  })
+
   it('keeps deferred contexts when a composite tool throws, but drops them when the outer call is blocked', async () => {
     const ctx = await setup()
     ctx.tools.register(defineContentToolFixture({

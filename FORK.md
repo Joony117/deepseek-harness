@@ -46,6 +46,7 @@ earlier moves (rc.1 cutover, rc.3 rebase, review rounds) lives in the tracker
 | (c) CallId alias | `packages/llm/llm/src/brand.ts` |
 | (d) strict startup | `DSH_STRICT_STARTUP=1` makes every inactive Loader entry fatal in `auditStartupEntries` (rc.2 fails only for its required ids) |
 | (d2) strict preflight | under the same switch a compatibility-preflight denial throws instead of disabling the row; an `allow-version` exemption still admits it |
+| (h) retired plugin source | `ToolRunContext.deferContext` rewrites a 0.1.x `{ kind: 'plugin', plugin }` source to `{ kind: plugin }` (v4 persistence refuses `plugin`; dsh-plugin-subscriptions' image_generate) |
 | (e) this file | |
 
 Generated catalogs, docs graphs and `*.i18n.yaml` records are not carried as hand edits:
