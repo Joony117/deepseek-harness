@@ -146,7 +146,11 @@ in step 6: check campaigns, stop the harness and confirm it exited, then back up
 3. In W, make `.prev` copies of every file the swap replaces, and copy `E:/memteach-pkg`
    aside, before any candidate is promoted.
 4. Keep the old head as `codex/harness-<old-version>`; move `codex/harness` to the staged
-   head in a clean live F; install; build.
+   head in a clean live F (no untracked files either); move aside (never delete) every dir under
+   `packages/*/*` and `vendor/*` with no tracked files at the new head (the other version's ignored `lib/` and
+   `node_modules` break tsdown's `packages/*/*` glob); install; `tsc -b tsconfig.host.json --force` and
+   `tsc -b tsconfig.client.json --force` (stale tsc -b state after a version switch); build.
+   W's `tools/fork-upgrade/p5-swap.ps1` runs steps 1-5 and the rollback (`-WhatIf` first).
 5. Apply the W candidates; retire any other launcher that shares `~/.dsh` on another build
    (at rc.2: `E:\Qwen3.8_27b\run-dsh.ps1`).
 6. Restart with `E:\Qwen3.8_27b\run-dsh-fork.ps1`; confirm `harness-branch` is green.
@@ -156,7 +160,7 @@ in step 6: check campaigns, stop the harness and confirm it exited, then back up
 
 **Rollback.** Stop the harness. Move the new-era `~/.dsh` aside (keep it; never restore the
 backup over it: newer generations would survive and the old tree would pick the highest and
-refuse it). Restore the backup into a clean home (same robocopy flags), move `codex/harness` back, offline install,
+refuse it). Restore the backup into a clean home (same robocopy flags), move `codex/harness` back, move leftovers aside, offline install, tsc --force,
 build, restore W's `.prev` files. Turns written after the swap are lost. Rollback does not
 undo Windows ACL grants made on workspaces by the sandbox; account for them separately.
 
