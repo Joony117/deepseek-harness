@@ -26,6 +26,9 @@ declare module '@deepseek-ai/dsh-llm' {
     'post': { kind: 'post' } & ContextFormed
     'test': { kind: 'test' } & ContextFormed
     'wrapper': { kind: 'wrapper' } & ContextFormed
+    // Fork: the retired 0.1.x wrapper a legacy plugin still defers, and the kind it becomes.
+    'plugin': { kind: 'plugin'; plugin: string } & ContextFormed
+    'dsh-plugin-subscriptions': { kind: 'dsh-plugin-subscriptions' } & ContextFormed
   }
 }
 
@@ -1095,7 +1098,7 @@ describe('ToolRuntime', () => {
   it('rewrites a deferred retired plugin source to the plugin kind and leaves other kinds alone (fork)', async () => {
     const ctx = await setup()
     // A 0.1.x plugin (dsh-plugin-subscriptions' image_generate) still defers `{ kind: 'plugin', plugin }`.
-    const retired = { kind: 'plugin', plugin: 'dsh-plugin-subscriptions' }
+    const retired = { kind: 'plugin' as const, plugin: 'dsh-plugin-subscriptions' }
     ctx.tools.register(defineContentToolFixture({
       name: 'legacy',
       description: 'legacy',
