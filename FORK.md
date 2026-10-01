@@ -41,7 +41,8 @@ earlier moves (rc.1 cutover, rc.3 rebase, review rounds) lives in the tracker
 |---|---|
 | (a) session delete | `delete` on the persistence seam (JSONL backend), the session-controller `@Remote('delete')`, client `ISessions.delete`, specs |
 | (a2) delete UI | one `sidebar.workspaces.session.menu.item` (id `delete`, order 450; plugin rows start at 500) + a `shell.overlay` confirm dialog; drop this commit alone to ship delete as API only |
-| (b) compaction | a failed automatic compaction is recorded; the summarizer runs with thinking off |
+| (a3, a4) delete fixtures | rc.2 test fakes gain `delete`; upstream menu tests count the delete row |
+| (b) compaction | a failed automatic compaction is recorded; the summarizer runs with thinking off. (b2) keeps upstream's rule: a pressure config error is warned, not recorded |
 | (c) CallId alias | `packages/llm/llm/src/brand.ts` |
 | (d) strict startup | `DSH_STRICT_STARTUP=1` makes every inactive Loader entry fatal in `auditStartupEntries` (rc.2 fails only for its required ids) |
 | (d2) strict preflight | under the same switch a compatibility-preflight denial throws instead of disabling the row; an `allow-version` exemption still admits it |
@@ -149,6 +150,40 @@ undo Windows ACL grants made on workspaces by the sandbox; account for them sepa
 
 ## Known failures at the base (not regressions)
 
-**rc.2 baseline: not yet measured.** Record here the pristine `dsh-v0.2.0-rc.2` failing
-identities and signatures from step 3 (lq-1bvo), three full runs, with the machine,
-Node version and date.
+**rc.2 baseline**, measured 2026-09-30 (lq-1bvo P2): pristine `dsh-v0.2.0-rc.2`
+(639ed01539), three full `pnpm run test` runs, `DSH_COVERAGE_TEST_TIMEOUT_MS` unset,
+Windows 10 19045, Ryzen 7 7800X3D (16 threads), 63 GB, Node v24.11.1.
+Runs: 28 / 22 / 22 failed tests, 37594 total.
+
+Identity is the repo-relative file + ` > ` + full test name. A fork run passes when every
+failure is listed here. A **stable** failure that passes is fine; a failure not listed
+blocks. Hygiene at the base fails `vendor rescope` (3 residue files) and `Cordis config`
+(`apps/cli/tests/profiles/acp/cordis.yml` root is not a Loader entry array).
+
+Stable (3/3), with signature:
+- `packages/client/ui-sidebar-documentpreview/tests/document-preview-license-bundle.client.spec.ts > published document preview licenses keeps bundled licenses in the packed lazy chunks` — `tar: Cannot connect to C: resolve failed`
+- `packages/deliverables/workspace-changes/tests/plugin.spec.ts`, 3 tests — `STACK_TRACE_ERROR`:
+  `… in a repository records inside the turn when the agent stops, and again after turn/end only when tools settled later`;
+  `… in a repository serves each listed file’s comparison from the snapshots or the captured copies`;
+  `… without a repository drops a disposed session’s recorder and starts afresh on its next turn`
+- `packages/fs/fs-sandbox/tests/fs-sandbox.spec.ts`, 2 symlink-out containment tests (`workspace-write containment a symlinked directory inside the workspace pointing OUT is denied …`, `… a NEW file created under a symlinked-out directory is denied …`) — promise resolved instead of rejecting
+- `packages/sandbox/sandbox-windows-acl/tests/diagnose-script.spec.ts` — file error, no message
+- `packages/shell/tool-pwsh-persistent/tests/loader-composition.spec.ts > persistent pwsh through a real cordis.yml Loader composition preserves cwd and environment across calls`
+- `packages/subprocess/subprocess-local/tests/native-windows.spec.ts > Windows Job native containment preserves missing-target and invalid-executable rejection errors`
+- `packages/subprocess/subprocess-local/tests/spawn-runner.spec.ts > runner launch inputs resolves Windows executables with target-cwd and PATH search semantics`
+- `packages/util/native-command/tests/file-applications-windows.spec.ts > queries and invokes a registered Windows handler through the system Shell`
+- `scripts/build-exe-for-python-sdk.spec.ts`, 2 tests (`… runs pnpm through its JavaScript entrypoint without a command shell`, `… resolves the pnpm package behind a Windows command shim`)
+- `scripts/migrate-sessions-to-v4.spec.ts`, 5 tests (`publishes none|zstd successors …`, `preserves none|zstd parent/child history …`, `shows help, rejects unknown arguments …`) — `STACK_TRACE_ERROR`
+
+Flaky (1 or 2 of 3; load-dependent, mostly `STACK_TRACE_ERROR` timeouts):
+- `apps/desktop/tests/windows-cli-signals.spec.ts > Windows Electron console signals delivers SIGINT before process exit` (2/3; the third run was a file error; fails 3/3 when run alone)
+- `packages/deliverables/workspace-changes/tests/git.spec.ts > snapshots and diffs fails loudly when the addressed repository cannot be written or diffed` (2/3)
+- `packages/skill/skill-office/tests/checkers.spec.ts`, both OOXML checker tests (2/3; pass 3/3 alone)
+- `packages/deliverables/workspace-changes/tests/plugin.spec.ts > … keeps an interrupted turn’s record when the next turn starts before it settles` (1/3; passes 3/3 alone)
+- `apps/desktop/tests/installed-update-package-content.spec.ts`, `packages/boot/plugin-manager/tests/manager.spec.ts > runs a real pnpm dependency script only after approval and retry`,
+  `packages/credentials/credentials-local/tests/local.spec.ts > real hot reload …`, `packages/experimental/webworker-packer/tests/image-loadable.spec.ts`,
+  `packages/session/session-persistence-jsonl/tests/catalog-migration.spec.ts` (2 zstd tests), `…/multi-edge-publication.spec.ts` (none),
+  `packages/session/session-projection-cache/tests/fixtures.spec.ts` (2 archived-version tests), `scripts/benchmark-npm-resolution.spec.ts` (2),
+  `scripts/migrate-sessions-to-v4.spec.ts > … accepts positive safe-integer --jobs 01` (each 1/3)
+
+A flaky identity that fails in a fork run gets a solo rerun in both trees before it is waved through.
