@@ -10,7 +10,7 @@ earlier moves (rc.1 cutover, rc.3 rebase, review rounds) lives in the tracker
 | Working branch | `codex/harness` — all local work lives here |
 | Fork base | tag `dsh-v0.2.0-rc.2` (`639ed015397290b3745d163aafe02ffee4aa3f84`) |
 | Previous base | tag `dsh-v0.1.5-rc.3` (`a4c74a91e06b00fe0b0937bde982170c526cc842`), branch `codex/harness-0.1.5-rc.3` (`11b710e70b`) |
-| Rollback | branch `codex/harness-0.1.5-rc.3` + the pre-swap `~/.dsh` tar under `E:\staging-lq-1bvo\backups\` |
+| Rollback | branch `codex/harness-0.1.5-rc.3` + the pre-swap `~/.dsh` robocopy backup under `E:\staging-lq-1bvo\backups\` |
 | Upstream default branch | `master` (**not** `main`) |
 | `origin` | `https://github.com/deepseek-ai/deepseek-harness.git` — upstream; push URL locally set to `DISABLED-push-to-upstream-forbidden` |
 | `fork` | `https://github.com/Joony117/deepseek-harness.git` — the owner's personal fork; the only push target |
@@ -129,18 +129,20 @@ vitest's `Errors  N error` summary line, `Worker exited unexpectedly`, `EAGAIN`,
 - Every `file://` or packaged W plugin's `@deepseek-ai/dsh*` peer range admits the new version.
 
 **5. Dry run on a copy of `~/.dsh`** (owner go; never open credentials). Snapshot order as
-in step 6: check campaigns, stop the harness and confirm it exited, then tar.
+in step 6: check campaigns, stop the harness and confirm it exited, then back up (step 6.2).
 - **Migration acceptance (counts only):** open every listed session in the copy for write
   with the new tree and print `directories`, `listed`, `migrated`, `alreadyCurrent` and
   `refused` by error class, never ids, paths or content. Pass is `listed == directories`
   and zero refusals. Anything else goes to the owner for a disposition before the swap.
   Resuming a few sessions is not a substitute: it cannot see a session left out of `list`.
-- **Rollback rehearsal:** extract the tar into an EMPTY scratch home and open it with the
+- **Rollback rehearsal:** restore the backup into an EMPTY scratch home and open it with the
   previous tree, built after `corepack pnpm install --offline --frozen-lockfile`.
 
 **6. Swap** (owner go), in this order:
 1. Step 0 preconditions again (campaigns, 3080 PID owner).
-2. Stop the harness and confirm the process exited. Only then tar `~/.dsh` to `$S/backups/`.
+2. Stop the harness and confirm the process exited. Only then back up `~/.dsh` to `$S/backups/` with
+   `robocopy <home> <backup> /E /SJ /SL /COPY:DAT /DCOPY:DAT` (links stay links). Not `tar`: Windows
+   `tar` follows the profile junctions into F and fails on dangling ones (lq-1bvo P5 rehearsal).
 3. In W, make `.prev` copies of every file the swap replaces, and copy `E:/memteach-pkg`
    aside, before any candidate is promoted.
 4. Keep the old head as `codex/harness-<old-version>`; move `codex/harness` to the staged
@@ -152,9 +154,9 @@ in step 6: check campaigns, stop the harness and confirm it exited, then tar.
    the row disappears and its session directory is gone. A refused delete keeps the row.
 8. Update the Fork base, Previous base and Rollback rows; push both heads to `fork`.
 
-**Rollback.** Stop the harness. Move the new-era `~/.dsh` aside (keep it; never extract the
-tar over it: newer generations would survive and the old tree would pick the highest and
-refuse it). Extract the tar into a clean home, move `codex/harness` back, offline install,
+**Rollback.** Stop the harness. Move the new-era `~/.dsh` aside (keep it; never restore the
+backup over it: newer generations would survive and the old tree would pick the highest and
+refuse it). Restore the backup into a clean home (same robocopy flags), move `codex/harness` back, offline install,
 build, restore W's `.prev` files. Turns written after the swap are lost. Rollback does not
 undo Windows ACL grants made on workspaces by the sandbox; account for them separately.
 
@@ -169,6 +171,8 @@ Identity is the repo-relative file + ` > ` + full test name. A fork run passes w
 failure is listed here. A **stable** failure that passes is fine; a failure not listed
 blocks. Hygiene at the base fails `vendor rescope` (3 residue files) and `Cordis config`
 (`apps/cli/tests/profiles/acp/cordis.yml` root is not a Loader entry array).
+A test run leaves an untracked `undefined/temp/` (an upstream test starts tsx without `TEMP`);
+remove it, and never run the tests in live F (it would turn `harness-branch` cleanliness red).
 
 Stable (3/3), with signature:
 - `packages/client/ui-sidebar-documentpreview/tests/document-preview-license-bundle.client.spec.ts > published document preview licenses keeps bundled licenses in the packed lazy chunks` — `tar: Cannot connect to C: resolve failed`
