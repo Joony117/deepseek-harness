@@ -46,7 +46,7 @@ earlier moves (rc.1 cutover, rc.3 rebase, review rounds) lives in the tracker
 | (c) CallId alias | `packages/llm/llm/src/brand.ts` |
 | (d) strict startup | `DSH_STRICT_STARTUP=1` makes every inactive Loader entry fatal in `auditStartupEntries` (rc.2 fails only for its required ids) |
 | (d2) strict preflight | under the same switch a compatibility-preflight denial throws instead of disabling the row; an `allow-version` exemption still admits it |
-| (h) retired plugin source | `ToolRunContext.deferContext` rewrites a 0.1.x `{ kind: 'plugin', plugin }` source to `{ kind: plugin }` (v4 persistence refuses `plugin`; dsh-plugin-subscriptions' image_generate) |
+| (h) retired plugin source | `ToolRunContext.deferContext` rewrites a 0.1.x `{ kind: 'plugin', plugin }` source to `{ kind: 'plugin:<name>' }`, other fields kept, as the v3→v4 migration names an unknown producer (v4 persistence refuses `plugin`; dsh-plugin-subscriptions' image_generate) |
 | (i) icon alias | ui-primitives exports `IconSparkle16 = IconSparkleRegular` for dsh-plugin-subscriptions' client half (else boot-client "did not activate"); the upstream icon-set test skips the alias |
 | (e) this file | |
 
