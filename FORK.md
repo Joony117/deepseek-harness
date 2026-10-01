@@ -105,10 +105,18 @@ Run `hygiene` by gate label (doc budgets and persistence changes included), then
 name) and signature, never by count. A failure only the fork has blocks until it is
 explained (same signature in pristine, or a named cause) or bounded (measured runs, rate,
 duration). A crashed worker hides tests as `pending`: rerun their file alone.
+Any unhandled error in the fork's run blocks the same way, even with no failing identity:
+vitest's `Errors  N error` summary line, `Worker exited unexpectedly`, `EAGAIN`, or
+`Some tests are still running when generating the JSON report`.
 
 **4. W checks against the new tree.**
-- Config load exits 0 and its stderr has no `did not activate`, `disabling profile plugin`
-  or `patch: entry` line:
+- W's imports of F still resolve: W's plugins import F's built `lib/` by relative path, so
+  after the swap they bind to whatever the new tree built. Must end `ALL PRESENT`:
+  `node E:/Qwen3.8_27b/tools/fork-upgrade/w-imports-check.mjs $S/harness <W root>`
+- Config load exits 0 and its stderr has no `did not activate` or `disabling profile plugin`
+  line and no `patch: entry` line, except the exact `patch: entry "<id>" not found` line for a
+  disable-only row (a patch whose keys are exactly `id` + `disabled: true`).
+  `node E:/Qwen3.8_27b/tools/fork-upgrade/config-gate.mjs` enforces this:
   `LOCAL_QWEN_API_KEY=local node $S/harness/apps/cli/lib/bin.js --profile web --patch E:/Qwen3.8_27b/deepseek-harness.yml --dump-config`
 - `--dump-config` runs neither the startup audit nor the preflight, so it proves composition
   only. The strict check is the boot:
