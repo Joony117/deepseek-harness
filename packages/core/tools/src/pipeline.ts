@@ -144,7 +144,7 @@ export class ToolExecutionPipeline {
         // (session-format-v3-to-v4 message-sources.ts) and the refused batch wedges the session log.
         const { kind, plugin, ...rest } = context.source as { kind: string; plugin?: unknown }
         deferredContexts.push(kind === 'plugin' && typeof plugin === 'string' && plugin.length > 0
-          ? deepFreeze({ ...context, source: { ...rest, kind: plugin } })
+          ? deepFreeze({ ...context, source: { ...rest, kind: plugin } as UserMessage['source'] })
           : context)
       },
       concludeTurn(this: ToolExecution): void {
