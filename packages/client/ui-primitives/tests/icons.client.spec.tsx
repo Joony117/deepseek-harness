@@ -15,8 +15,9 @@ afterEach(cleanup)
 
 // Icon components all share the IconProps signature; the barrel also exports
 // non-icon atoms (different props shapes), so filter by prefix BEFORE typing.
+// Fork: IconSparkle16 is a 0.1.x compat alias, not a glyph of its own.
 const icons = Object.fromEntries(
-  Object.entries(primitives).filter(([name]) => name.startsWith('Icon')),
+  Object.entries(primitives).filter(([name]) => name.startsWith('Icon') && name !== 'IconSparkle16'),
 ) as Record<string, (p: primitives.IconProps) => React.JSX.Element>
 const iconNames = Object.keys(icons)
 const glyphs = Object.keys(ICON_ARTWORK) as IconGlyph[]
@@ -25,6 +26,10 @@ function artwork(glyph: IconGlyph, weight: IconWeight): Document {
   const stroke = weight === 'regular' ? primitives.ICON_REGULAR_STROKE : primitives.ICON_MEDIUM_STROKE
   return new DOMParser().parseFromString(ICON_ARTWORK[glyph].svg(stroke), 'image/svg+xml')
 }
+
+it('keeps IconSparkle16 as the regular sparkle for 0.1.x plugins (fork)', () => {
+  expect(primitives.IconSparkle16).toBe(primitives.IconSparkleRegular)
+})
 
 describe('product icon set', () => {
   it('exports regular and medium variants for every public glyph', () => {

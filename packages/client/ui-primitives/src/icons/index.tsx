@@ -462,6 +462,9 @@ export const IconSparkleRegular = productIcon('sparkle', 'regular')
 /** Medium IconSparkle artwork with a 1.3px stroke. */
 export const IconSparkleMedium = productIcon('sparkle', 'medium')
 
+/** Fork: 0.1.x name kept for dsh-plugin-subscriptions' client half; without it boot-client.ts reports "did not activate". */
+export const IconSparkle16 = IconSparkleRegular
+
 /** Regular one-pixel IconInspectOutline artwork. */
 export const IconInspectOutlineRegular = productIcon('inspect-outline', 'regular')
 
