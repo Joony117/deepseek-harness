@@ -278,6 +278,12 @@ describe('registration', () => {
     expect(ctx.tools.get('grep')?.timeoutMs).toBe(5000)
   })
 
+  it('lets the loop run sibling glob and grep calls in parallel', async () => {
+    const { ctx } = await setup()
+    expect(ctx.tools.get('glob')?.isConcurrencySafe?.({ pattern: '*' })).toBe(true)
+    expect(ctx.tools.get('grep')?.isConcurrencySafe?.({ pattern: 'x' })).toBe(true)
+  })
+
   it('defaults the timeout budget to 30 seconds', async () => {
     const { ctx } = await setup()
     expect(ctx.tools.get('glob')?.timeoutMs).toBe(30_000)
