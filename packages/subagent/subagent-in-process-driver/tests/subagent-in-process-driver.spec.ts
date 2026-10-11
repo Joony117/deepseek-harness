@@ -413,7 +413,7 @@ describe('startInProcessRun', () => {
     await expect(run.result).resolves.toEqual({
       output: [{ type: 'text', text: 'partial' }],
       stopReason: 'error',
-      diagnostic: 'child stopped after 30ms without starting a model step',
+      diagnostic: 'child stopped: no new model step started for 30ms',
     })
     await run.dispose()
   })

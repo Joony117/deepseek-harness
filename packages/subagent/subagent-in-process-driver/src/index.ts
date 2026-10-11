@@ -183,7 +183,7 @@ export async function startInProcessRun(
       const arm = (): void => {
         clearTimeout(flags.stall)
         flags.stall = setTimeout(() => {
-          flags.limit ??= `child stopped after ${stallMs}ms without starting a model step`
+          flags.limit ??= `child stopped: no new model step started for ${stallMs}ms`
           child.cancel({ kind: 'parent' })
         }, stallMs)
       }
