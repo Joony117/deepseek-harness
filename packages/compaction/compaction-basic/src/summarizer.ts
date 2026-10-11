@@ -74,6 +74,14 @@ const COMPACTION_INSTRUCTION = [
   `- If the conversation already contains a ${SUMMARY_OPEN_TAG} block, it is a PRIOR checkpoint. Do not copy it forward verbatim: preserve still-true facts, drop stale ones, and merge newer information into a single consolidated summary under the same structure.`,
 ].join('\n')
 
+/**
+ * Sent once, after the instruction, when the model answered the instruction
+ * with only tool calls. The rejected output is not replayed, so the request is
+ * the first one's cached prefix plus this message.
+ */
+const NO_TOOLS_NUDGE =
+  'Tool calls are disabled for this request; any tool call is discarded. Do not call a tool. Output only the checkpoint text in the structure above.'
+
 /** Framing that makes the replacement user message established context. */
 const CHECKPOINT_PREAMBLE =
   'This is an automatically generated checkpoint condensing an earlier span of the conversation to free up context. Treat the captured context as established background and build on it without restating it. Continue the task directly from the messages that follow, without acknowledging this checkpoint.'
@@ -103,8 +111,10 @@ export type SummaryResult = {
   | {
     /** Complete provider output before the text-only summary projection. */
     rawOutput: ContentBlock[]
-    /** Identifies exactly one call through this context's `ctx.llm.stream()`. */
+    /** Identifies the call through this context's `ctx.llm.stream()` that produced `rawOutput`. */
     llmStreamCall: true
+    /** Output of an earlier call on the same seam that held only tool calls, followed by one re-ask. */
+    rejectedOutput?: ContentBlock[]
   }
   | {
     /** Optional complete output from an unmarked template, remote, or other summarizer. */
@@ -178,7 +188,6 @@ export async function summarizeWithLlm(
     )
   }
 
-  const assembler = new BlockAssembler()
   const messages: RequestMessage[] = [
     ...input.messages,
     deepFreeze({
@@ -199,24 +208,51 @@ export async function summarizeWithLlm(
     purpose: 'compaction',
     ...signal === undefined ? {} : { signal },
   }
-  for await (const chunk of ctx.llm.stream(options)) assembler.push(chunk)
-  const error = finishError(assembler.finish)
-  if (error !== undefined) throw error
-
-  const rawOutput = assembler.blocks()
-  const summary = summaryText(rawOutput)
-  if (!summary.some(block => block.text.trim().length > 0)) {
+  let call = await streamOnce(ctx, options)
+  let summary = summaryText(call.blocks)
+  let rejectedOutput: ContentBlock[] | undefined
+  // A tool-oriented model can answer the instruction with a tool call even
+  // though the tools are only replayed for the cache. Ask once more instead of
+  // failing the whole compaction.
+  if (!hasText(summary) && call.blocks.some(block => block.type === 'tool-call')) {
+    rejectedOutput = call.blocks
+    call = await streamOnce(ctx, {
+      ...options,
+      messages: [...messages, deepFreeze({ role: 'user', content: [{ type: 'text', text: NO_TOOLS_NUDGE }] })],
+    })
+    summary = summaryText(call.blocks)
+  }
+  if (!hasText(summary)) {
     throw new Error('summarization produced no text summary content')
   }
+  const { blocks: rawOutput, usage } = call
   return {
     summary,
     rawOutput,
     llmStreamCall: true,
+    ...rejectedOutput === undefined ? {} : { rejectedOutput },
     provider: options.provider,
     model: options.model,
     maxTokens: config.maxTokens,
-    ...(assembler.usage === undefined ? {} : { usage: assembler.usage }),
+    ...(usage === undefined ? {} : { usage }),
   }
+}
+
+/** Run one summarization stream to a successful finish, or throw its fail-closed error. */
+async function streamOnce(
+  ctx: Context,
+  options: GenerateOptions,
+): Promise<{ blocks: ContentBlock[]; usage?: TokenUsage }> {
+  const assembler = new BlockAssembler()
+  for await (const chunk of ctx.llm.stream(options)) assembler.push(chunk)
+  const error = finishError(assembler.finish)
+  if (error !== undefined) throw error
+  return { blocks: assembler.blocks(), ...assembler.usage === undefined ? {} : { usage: assembler.usage } }
+}
+
+/** Whether summary text has any non-whitespace content. */
+function hasText(summary: readonly Extract<ContentBlock, { type: 'text' }>[]): boolean {
+  return summary.some(block => block.text.trim().length > 0)
 }
 
 /**

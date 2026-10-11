@@ -313,7 +313,6 @@ describe('compact configuration and defaults', () => {
 
     expect(resolved).toEqual({
       thresholdRatio: 0.8,
-      headroomTokens: 65_536,
       retainRatio: 0.16,
       summarizationProvider: '',
       summarizationModel: '',
@@ -326,13 +325,15 @@ describe('compact configuration and defaults', () => {
     expect(Object.isFrozen(resolved)).toBe(true)
   })
 
-  it('defaults summary generation to headroom and preserves explicit caps', () => {
+  it('keeps the summary cap independent of headroom and preserves explicit caps', () => {
+    // #8785: lowering headroom must not silently shrink the summary output cap.
     const target = { provider: MODEL, model: MODEL }
-    expect(resolveConfig({ headroomTokens: 16_384 }).maxTokens).toBe(16_384)
+    expect(resolveConfig({ headroomTokens: 8_192 }).maxTokens).toBe(65_536)
+    expect(resolveConfig({ headroomTokens: 0 }).maxTokens).toBe(65_536)
     expect(resolveConfig({ headroomTokens: 0, maxTokens: 32 }).maxTokens).toBe(32)
     expect(resolveTargetPolicy(resolveConfig({
-      modelPolicies: [{ ...target, headroomTokens: 16_384 }],
-    }), target).maxTokens).toBe(16_384)
+      modelPolicies: [{ ...target, headroomTokens: 0 }],
+    }), target).maxTokens).toBe(65_536)
     expect(resolveTargetPolicy(resolveConfig({
       maxTokens: 512,
       modelPolicies: [{ ...target, headroomTokens: 0 }],
@@ -343,11 +344,17 @@ describe('compact configuration and defaults', () => {
     }), target).maxTokens).toBe(32)
   })
 
-  it('rejects a zero summary cap inherited from headroom', () => {
-    expect(() => resolveConfig({ headroomTokens: 0 })).toThrow(/maxTokens.*positive integer/)
-    expect(() => resolveConfig({
-      modelPolicies: [{ provider: MODEL, model: MODEL, headroomTokens: 0 }],
-    })).toThrow(/modelPolicies\[0\].maxTokens.*positive integer/)
+  it.each([
+    // #8785: [window, output cap, threshold]. Default headroom is 10% of the
+    // message budget, capped at 64K, so small local windows keep ~80% pressure.
+    [130_000, 16_384, 102_255],
+    [131_072, 32_768, 88_474],
+    [200_000, 32_768, 150_509],
+    // Previously a negative pressure budget that silently disabled auto-compaction.
+    [80_000, 32_000, 43_200],
+  ])('scales default headroom for window %i with output cap %i', (window, output, threshold) => {
+    const policy = resolveTargetPolicy(resolveConfig({}), { provider: MODEL, model: MODEL })
+    expect(resolveCompactSpec(policy, window, output).thresholdTokens).toBe(threshold)
   })
 
   it('resolves threshold and retention overrides independently', () => {
@@ -434,7 +441,7 @@ describe('compact configuration and defaults', () => {
     [1_000_000, 100_000, 800_000, 144_000],
     [1_000_000, 134_464, 800_000, 138_485],
     [1_000_000, 256_000, 678_464, 119_040],
-  ])('reserves 64K headroom in window %i with output cap %i', (window, output, threshold, retained) => {
+  ])('caps default headroom at 64K in window %i with output cap %i', (window, output, threshold, retained) => {
     const policy = resolveTargetPolicy(resolveConfig({}), { provider: MODEL, model: MODEL })
 
     expect(resolveCompactSpec(policy, window, output)).toMatchObject({
@@ -1325,6 +1332,10 @@ describe('compaction region transaction', () => {
 
 class ScriptedAdapter extends LlmAdapter {
   lastOptions: GenerateOptions | undefined
+  /** Every request, in call order. */
+  readonly calls: GenerateOptions[] = []
+  /** Per-call outputs consumed before falling back to the constructor blocks. */
+  queued: (readonly ContentBlock[])[] = []
   usage: TokenUsage | undefined
   /** Reasoning levels this route advertises; absent keeps the model non-reasoning. */
   reasoningEfforts: readonly string[] | undefined
@@ -1353,7 +1364,9 @@ class ScriptedAdapter extends LlmAdapter {
 
   override async * stream(options: GenerateOptions): AsyncIterable<StreamChunk> {
     this.lastOptions = options
-    for (const [index, block] of this.blocks.entries()) {
+    this.calls.push(options)
+    const blocks = this.queued.shift() ?? this.blocks
+    for (const [index, block] of blocks.entries()) {
       yield { type: 'block-start', index, blockType: block.type }
       if (block.type === 'text') {
         yield { type: 'text-delta', index, text: block.text }
@@ -1376,6 +1389,7 @@ class ExposedCompactionEngine extends BasicCompactionEngine {
   ): Promise<{
     summary: ContentBlock[]
     rawOutput?: ContentBlock[]
+    rejectedOutput?: ContentBlock[]
     provider: string
     model: string
     maxTokens?: number
@@ -1402,6 +1416,23 @@ async function summarizerHarness(
 }
 
 describe('default one-shot summarizer', () => {
+  it('logs the rejected tool-call-only output with the summary that replaced it', async () => {
+    const call: ContentBlock = { type: 'tool-call', id: ToolCallId('call_1'), name: 'read', arguments: '{}' }
+    const { adapter, compact } = await summarizerHarness([{ type: 'text', text: 'summary' }])
+    adapter.queued = [[call]]
+    const session = conversation(3)
+    const nodes = [...session.surface.nodes]
+
+    await compact.compactRegion(nodes[0]!, nodes[1]!, agent(session, MODEL), SIGNAL)
+
+    const summary = session.snapshotEvents().findLast(event => event.type === 'compaction/summary')
+    expect(summary?.data).toMatchObject({
+      rawOutput: [{ type: 'text', text: 'summary' }],
+      llmStreamCall: true,
+      rejectedOutput: [call],
+    })
+  })
+
   it.each([undefined, '', 'SYSTEM HEAD\n精确前缀\n'])('preserves the routed prefix through region summarization with system %j', async (system) => {
     const { adapter, compact } = await summarizerHarness([{ type: 'text', text: 'summary' }])
     const session = conversation(3, undefined, system)
@@ -1698,10 +1729,39 @@ describe('default one-shot summarizer', () => {
     },
   )
 
-  it('rejects empty or reasoning-only successful output', async () => {
-    const { compact } = await summarizerHarness([{ type: 'reasoning', text: 'private' }])
+  it('re-asks once without replaying the output when the model answers with only a tool call', async () => {
+    const call: ContentBlock = { type: 'tool-call', id: ToolCallId('call_1'), name: 'read', arguments: '{}' }
+    const { adapter, compact } = await summarizerHarness([{ type: 'text', text: 'checkpoint' }])
+    adapter.queued = [[call]]
+    const tools = [{ name: 'read', description: 'r', parameters: { type: 'object' } }]
+
+    const result = await compact.runSummarize({ ...promptInput('history'), tools }, agent(conversation(1), MODEL))
+
+    expect(adapter.calls).toHaveLength(2)
+    const [first, second] = adapter.calls
+    expect(second?.tools).toEqual(tools)
+    expect(second?.messages.slice(0, -1)).toEqual(first?.messages)
+    const nudge = second?.messages.at(-1)?.content[0]
+    expect(nudge?.type === 'text' ? nudge.text : '').toContain('Tool calls are disabled')
+    expect(result.summary).toEqual([{ type: 'text', text: 'checkpoint' }])
+    expect(result.rawOutput).toEqual([{ type: 'text', text: 'checkpoint' }])
+    expect(result.rejectedOutput).toEqual([call])
+  })
+
+  it('fails after one re-ask when the model calls a tool again', async () => {
+    const call: ContentBlock = { type: 'tool-call', id: ToolCallId('call_1'), name: 'read', arguments: '{}' }
+    const { adapter, compact } = await summarizerHarness([call])
+
     await expect(compact.runSummarize(promptInput('history'), agent(conversation(1), MODEL)))
       .rejects.toThrow(/no text summary content/)
+    expect(adapter.calls).toHaveLength(2)
+  })
+
+  it('rejects empty or reasoning-only successful output', async () => {
+    const { adapter, compact } = await summarizerHarness([{ type: 'reasoning', text: 'private' }])
+    await expect(compact.runSummarize(promptInput('history'), agent(conversation(1), MODEL)))
+      .rejects.toThrow(/no text summary content/)
+    expect(adapter.calls).toHaveLength(1)
   })
 
   it('rejects image summary output instead of silently dropping it', async () => {
@@ -1884,6 +1944,85 @@ describe('automatic listener and loader composition', () => {
     const ends = session.snapshotEvents().filter(event => event.type === 'compaction/end')
     expect(ends).toHaveLength(1)
     expect(ends[0]?.data.error).toContain('summarization truncated at the token cap')
+  })
+
+  /** Append one more exchange to the open turn so measured pressure grows. */
+  function grow(session: Session, text = 'growth '.repeat(60).trim()): void {
+    session.append('user/message', createUserMessage({
+      content: [{ type: 'text', text }],
+      source: { kind: 'user' },
+    }), { surfaceOp: 'append' })
+  }
+
+  it('backs off after a rejected non-shrinking summary until pressure grows (#7212)', async () => {
+    const ctx = createContext()
+    ctx.logger.warn = (() => undefined) as typeof ctx.logger.warn
+    const compact = new TestCompactionEngine(ctx, { thresholdRatio: 0.5, retainTokens: 180 })
+    compact.summary = Array.from({ length: 200 }, (_, index) => ({ type: 'text', text: `verbose ${index}` }))
+    const session = conversation(4)
+    const owner = agent(session, MODEL)
+
+    await preStep(ctx, owner)
+    expect(compact.calls).toHaveLength(1)
+    // Same surface, next tool steps: no new summarization.
+    await preStep(ctx, owner)
+    await preStep(ctx, owner)
+    expect(compact.calls).toHaveLength(1)
+    const ends = session.snapshotEvents().filter(event => event.type === 'compaction/end')
+    expect(ends).toHaveLength(1)
+
+    grow(session)
+    await preStep(ctx, owner)
+    expect(compact.calls).toHaveLength(2)
+  })
+
+  it('backs off after successful compaction that stays above threshold (#5669)', async () => {
+    const ctx = createContext()
+    ctx.logger.warn = (() => undefined) as typeof ctx.logger.warn
+    const compact = new TestCompactionEngine(ctx, {
+      compactionRetries: 0,
+      thresholdRatio: 0.3,
+      retainTokens: 180,
+    })
+    compact.summary = Array.from({ length: 7 }, (_, index) => ({ type: 'text', text: `summary ${index}` }))
+    const session = conversation(4)
+    const owner = agent(session, MODEL)
+
+    await preStep(ctx, owner)
+    expect(compact.calls).toHaveLength(1)
+    await preStep(ctx, owner)
+    expect(compact.calls).toHaveLength(1)
+  })
+
+  it('does not back off after a cancelled pressure attempt', async () => {
+    const ctx = createContext()
+    const compact = new TestCompactionEngine(ctx, { thresholdRatio: 0.5, retainTokens: 180 })
+    const session = conversation(4)
+    const controller = new AbortController()
+    compact.mutateDuringSummary = () => controller.abort()
+    compact.error = new Error('cancelled mid-summary')
+
+    await expect(compact.compactIfNeeded(agent(session, MODEL), 'pressure', controller.signal))
+      .rejects.toThrow('cancelled mid-summary')
+    compact.mutateDuringSummary = undefined
+    compact.error = undefined
+    await expect(compactIfNeeded(compact, session)).resolves.not.toBeNull()
+    expect(compact.calls).toHaveLength(2)
+  })
+
+  it('lets provider-confirmed overflow bypass pressure backoff', async () => {
+    const ctx = createContext()
+    ctx.logger.warn = (() => undefined) as typeof ctx.logger.warn
+    const compact = new TestCompactionEngine(ctx, { thresholdRatio: 0.5, retainTokens: 180 })
+    compact.summary = Array.from({ length: 200 }, (_, index) => ({ type: 'text', text: `verbose ${index}` }))
+    const session = conversation(4)
+    const owner = agent(session, MODEL)
+
+    await preStep(ctx, owner)
+    expect(compact.calls).toHaveLength(1)
+    compact.summary = [{ type: 'text', text: 'short' }]
+    await expect(recover(ctx, owner, overflow())).resolves.toBe(true)
+    expect(compact.calls).toHaveLength(2)
   })
 
   it('warns once per routed target when absolute retention exceeds its resolved threshold', async () => {
