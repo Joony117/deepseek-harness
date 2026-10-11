@@ -55,8 +55,14 @@ declare module '@deepseek-ai/dsh-session/types' {
       | {
         /** Complete provider output before the backend's safe summary projection. */
         rawOutput: ContentBlock[]
-        /** Identifies exactly one call through this context's `ctx.llm.stream()`. */
+        /** Identifies the call through this context's `ctx.llm.stream()` that produced `rawOutput`. */
         llmStreamCall: true
+        /**
+         * Output of an earlier call through the same seam that held only tool
+         * calls; the backend then re-asked once, and `rawOutput` is that
+         * second call. Replay reproduces both calls in order.
+         */
+        rejectedOutput?: ContentBlock[]
       }
       | {
         /** Optional complete output from an unmarked template, remote, or other summarizer. */
