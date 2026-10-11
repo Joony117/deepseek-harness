@@ -111,17 +111,26 @@ export interface PiAiAuthInjection {
   authContext: AuthContext
 }
 
-/** Copy profile stream knobs into pi-ai's common option vocabulary. */
+/**
+ * Copy profile stream knobs into pi-ai's common option vocabulary. A
+ * compaction request takes the profile's `compactionThinkingBudget` at every
+ * level in place of `thinkingBudgets`.
+ */
 function profileOptions(
   profile: ResolvedPiAiProviderProfile,
   reasoning: ModelThinkingLevel | undefined,
   apiKey: string | undefined,
+  purpose: GenerateOptions['purpose'],
 ): SimpleStreamOptions {
   const enabledReasoning: ThinkingLevel | undefined = reasoning === 'off' ? undefined : reasoning
+  const budget = purpose === 'compaction' ? profile.compactionThinkingBudget : undefined
+  const thinkingBudgets = budget === undefined
+    ? profile.thinkingBudgets
+    : { minimal: budget, low: budget, medium: budget, high: budget }
   return {
     ...apiKey === undefined ? {} : { apiKey },
     ...enabledReasoning === undefined ? {} : { reasoning: enabledReasoning },
-    ...profile.thinkingBudgets === undefined ? {} : { thinkingBudgets: profile.thinkingBudgets },
+    ...thinkingBudgets === undefined ? {} : { thinkingBudgets },
     ...profile.cacheRetention === undefined ? {} : { cacheRetention: profile.cacheRetention },
     ...profile.transport === undefined ? {} : { transport: profile.transport },
     ...profile.timeoutMs === undefined ? {} : { timeoutMs: profile.timeoutMs },
@@ -378,7 +387,7 @@ export class PiAiAdapter extends LlmAdapter {
           },
         }, onReplayDegrade)
       const events = snapshot.models.streamSimple(model, context, {
-        ...profileOptions(profile, reasoning, apiKey),
+        ...profileOptions(profile, reasoning, apiKey, options.purpose),
         ...options.temperature === undefined ? {} : { temperature: options.temperature },
         ...options.maxTokens === undefined ? {} : { maxTokens: options.maxTokens },
         ...options.sessionId === undefined ? {} : { sessionId: String(options.sessionId) },

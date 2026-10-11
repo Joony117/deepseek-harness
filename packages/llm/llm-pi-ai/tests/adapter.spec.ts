@@ -152,6 +152,27 @@ describe('PiAiAdapter provider routing', () => {
     expect(server.requests[0]).not.toHaveProperty('dsh_plugin_packages')
   })
 
+  it('caps compaction reasoning with compactionThinkingBudget and keeps the effort', async () => {
+    const server = await mockServer([{ events: textEvents }, { events: textEvents }])
+    const ctx = await harness(server.url, {
+      api: 'openai-completions',
+      models: [{
+        id: 'local-qwen',
+        reasoningEfforts: { off: 'none', high: 'high' },
+        compat: { thinkingTokenBudgetField: 'thinking_budget_tokens' },
+      }],
+      thinkingBudgets: { minimal: 30_000, low: 30_000, medium: 30_000, high: 30_000 },
+      compactionThinkingBudget: 4096,
+    })
+    const request = { model: 'local-qwen', reasoningEffort: ReasoningEffortId('high'), maxTokens: 65_536, messages: [] }
+
+    await assemble(ctx, request)
+    await assemble(ctx, { ...request, purpose: 'compaction' })
+
+    expect(server.requests[0]).toMatchObject({ reasoning_effort: 'high', thinking_budget_tokens: 30_000 })
+    expect(server.requests[1]).toMatchObject({ reasoning_effort: 'high', thinking_budget_tokens: 4096 })
+  })
+
   it('uses a dynamic request effort and reports unsupported efforts before network I/O', async () => {
     const server = await mockServer([{ events: textEvents }, { events: textEvents }])
     const ctx = await harness(server.url, { reasoning: 'max' })

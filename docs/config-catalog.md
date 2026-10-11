@@ -1602,7 +1602,7 @@ export interface Config extends ProtocolConfig {
 
 - `inject`: `llm`
 - `refs`: `Api` (`@earendil-works/pi-ai`) · `CacheRetention` (`@earendil-works/pi-ai`) · `Model` (`@earendil-works/pi-ai`) · `ModelThinkingLevel` (`@earendil-works/pi-ai`) · `OpenAICompletionsCompat` (`@earendil-works/pi-ai`) · [`RetryPolicyConfig`](../packages/llm/llm/src/index.ts) · `ThinkingBudgets` (`@earendil-works/pi-ai`) · `Transport` (`@earendil-works/pi-ai`) · `Volatile` (`@deepseek-ai/cordis`)
-- `source`: [`packages/llm/llm-pi-ai/src/config.ts:222`](../packages/llm/llm-pi-ai/src/config.ts)
+- `source`: [`packages/llm/llm-pi-ai/src/config.ts:231`](../packages/llm/llm-pi-ai/src/config.ts)
 
 ```ts config-catalog
 /** Plugin configuration: the provider routes this instance owns. */
@@ -1681,6 +1681,15 @@ export interface PiAiProviderProfile {
   reasoning?: ModelThinkingLevel
   /** Token budgets used by reasoning providers that support them. */
   thinkingBudgets?: ThinkingBudgets
+  /**
+   * Reasoning-token budget for compaction summary requests, at every level, in
+   * place of {@link thinkingBudgets}. It caps thinking without changing the
+   * reasoning effort, so the replayed prompt stays byte-identical to the
+   * conversation's and the server reuses its prefix cache. It reaches the
+   * provider only through a configured budget field (`compat.thinkingTokenBudgetField`
+   * or a `chatTemplateKwargs` budget variable).
+   */
+  compactionThinkingBudget?: number
   /** Prompt-cache retention preference. */
   cacheRetention?: CacheRetention
   /** Streaming transport preference. */
