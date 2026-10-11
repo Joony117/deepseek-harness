@@ -559,6 +559,7 @@ function buildSummarizationInput(
   return {
     ...header?.tools === undefined ? {} : { tools: header.tools },
     messages: system === null ? regionMessages : [system, ...regionMessages],
+    surface: session.deriveMessages(),
   }
 }
 

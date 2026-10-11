@@ -26,6 +26,12 @@ export interface CompactionPolicyConfig {
   compactionRetries?: number
   /** Maximum retries after canonical context overflow; `0` disables recovery. Defaults to `1`. */
   maxOverflowRetries?: number
+  /**
+   * The route's prompt cache only survives a request that purely extends the previous one
+   * (a recurrent-state server such as ninfer). Pressure then never trims tool results on
+   * its own, and the summary request replays the whole last prompt. Defaults to `false`.
+   */
+  appendOnly?: boolean
 }
 
 /** Exact provider/model override merged over the default compaction policy. */
@@ -59,6 +65,7 @@ interface ResolvedPolicyFields {
   readonly maxTokens: number
   readonly compactionRetries: number
   readonly maxOverflowRetries: number
+  readonly appendOnly: boolean
 }
 
 /** Validated immutable config whose target-specific defaults remain unresolved. */

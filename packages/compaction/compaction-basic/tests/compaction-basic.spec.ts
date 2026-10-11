@@ -319,6 +319,7 @@ describe('compact configuration and defaults', () => {
       maxTokens: 65_536,
       compactionRetries: 1,
       maxOverflowRetries: 1,
+      appendOnly: false,
       modelPolicies: [],
       auto: true,
     })
@@ -1009,6 +1010,48 @@ describe('optional model-free tool-result pruning', () => {
     expect(summarizedText(compact.calls[0]!.input)).not.toContain('result 1 '.repeat(300))
   })
 
+  it('on an append-only route, summarizes instead of rewriting an old result to clear pressure', async () => {
+    // ninfer re-reads everything after a rewritten result; a trim-only pass buys that cost with no summary.
+    const ctx = createContext(1_000)
+    void new ToolResultPruner(ctx, pruneConfig)
+    const compact = new TestCompactionEngine(ctx, {
+      headroomTokens: 0,
+      maxTokens: 8192,
+      auto: false,
+      thresholdRatio: 0.5,
+      retainTokens: 50,
+      appendOnly: true,
+    })
+    const session = oversizedToolResult(3_000, true)
+
+    expect(await compactIfNeeded(compact, session)).not.toBeNull()
+    expect(compact.calls).toHaveLength(1)
+  })
+
+  it('on an append-only route, summarizes the untrimmed surface and trims only what the summary keeps', async () => {
+    const ctx = createContext(2_000)
+    void new ToolResultPruner(ctx, pruneConfig)
+    const compact = new TestCompactionEngine(ctx, {
+      headroomTokens: 0,
+      maxTokens: 8192,
+      auto: false,
+      thresholdRatio: 0.5,
+      retainTokens: 50,
+      appendOnly: true,
+    })
+    const session = toolConversation()
+
+    expect(await compactIfNeeded(compact, session)).not.toBeNull()
+    expect(compact.calls).toHaveLength(1)
+    expect(summarizedText(compact.calls[0]!.input)).not.toContain('tool result middle pruned')
+    expect(summarizedText(compact.calls[0]!.input)).toContain('result 1 '.repeat(300))
+    const kept = session.deriveMessages().filter(message => message.role === 'tool')
+    expect(kept.length).toBeGreaterThan(0)
+    for (const message of kept) {
+      expect(summarizedText({ messages: [message] })).toContain('tool result middle pruned')
+    }
+  })
+
   it('retains the original compaction-basic behavior without the optional plugin', async () => {
     const ctx = createContext(2_000)
     const compact = new TestCompactionEngine(ctx, {
@@ -1080,11 +1123,12 @@ describe('compaction region transaction', () => {
       reason: 'resume',
     })
     const nodes = session.surface.nodes
-    const prefix = session.deriveMessages().slice(0, 3)
+    const surface = session.deriveMessages()
+    const prefix = surface.slice(0, 3)
     await compact.compactRegion(nodes[1]!, nodes[2]!, agent(session, MODEL), SIGNAL)
 
     const { input } = compact.calls[0]!
-    expect(input).toEqual({ messages: prefix, tools })
+    expect(input).toEqual({ messages: prefix, tools, surface })
   })
 
   it('omits the summarizer system prompt for an empty system head or a system-less surface', async () => {
@@ -1433,6 +1477,58 @@ describe('default one-shot summarizer', () => {
     expect(Object.isFrozen(instruction?.content[0])).toBe(true)
     expect(result.shadowedSeqs).toEqual(nodes.slice(start, start + 2))
     if (system !== undefined) expect(session.surface.nodes[0]).toBe(nodes[0])
+  })
+
+  describe('on an append-only route', () => {
+    async function appendOnlyRun(maxTokens: number, room: (promptTokens: number) => number) {
+      const harness = await summarizerHarness(
+        [{ type: 'text', text: 'summary' }],
+        undefined,
+        MODEL,
+        { auto: false, appendOnly: true, maxTokens },
+      )
+      const session = conversation(3)
+      session.append('request/header', {
+        header: {
+          config: { provider: MODEL, model: MODEL },
+          tools: [{ name: 'do_thing', description: 'd', parameters: { type: 'object' } }],
+        },
+        reason: 'resume',
+      })
+      const surface = session.deriveMessages()
+      const contextWindow = room(harness.ctx.tokenMeter.measure(session).totalTokens)
+      vi.spyOn(harness.ctx.llm, 'resolveModelInfo').mockImplementation((provider, model) => Promise.resolve({
+        provider, id: model, name: model, context: { contextWindow },
+      }))
+      const nodes = session.surface.nodes
+      await harness.compact.compactRegion(nodes[0]!, nodes[1]!, agent(session, MODEL), SIGNAL)
+      return { options: harness.adapter.lastOptions!, surface }
+    }
+
+    it('replays the whole last prompt and appends only the directive', async () => {
+      // The shadowed-region form cut the prompt at the region and put the directive where
+      // the next message was, so ninfer fell back to an early checkpoint (10,777 of 47,909).
+      const { options, surface } = await appendOnlyRun(500, prompt => prompt + 100_000)
+
+      expect(options.messages.slice(0, -1)).toEqual(surface)
+      expect(options.messages.at(-1)).toMatchObject({ role: 'user' })
+      expect(options.maxTokens).toBe(500)
+    })
+
+    it('shrinks the summary cap to the room the whole prompt leaves', async () => {
+      const { options, surface } = await appendOnlyRun(65_536, prompt => prompt + 20_000)
+
+      expect(options.messages.slice(0, -1)).toEqual(surface)
+      expect(options.maxTokens).toBeGreaterThan(8_192)
+      expect(options.maxTokens).toBeLessThan(20_000)
+    })
+
+    it('falls back to the shadowed region when the whole prompt leaves too little room', async () => {
+      const { options, surface } = await appendOnlyRun(65_536, prompt => prompt + 1_000)
+
+      expect(options.messages.slice(0, -1)).toEqual(surface.slice(0, 2))
+      expect(options.maxTokens).toBe(65_536)
+    })
   })
 
   it('requires complete raw output when a subclass marks one local LLM stream call', () => {

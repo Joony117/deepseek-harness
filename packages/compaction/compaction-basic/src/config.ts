@@ -42,6 +42,7 @@ const POLICY_CONFIG_KEYS = [
   'maxTokens',
   'compactionRetries',
   'maxOverflowRetries',
+  'appendOnly',
 ] as const
 
 /** Complete public top-level configuration key set. */
@@ -103,6 +104,7 @@ export function resolveConfig(config: BasicCompactionConfig = {}): ResolvedConfi
     maxTokens,
     compactionRetries: config.compactionRetries ?? 1,
     maxOverflowRetries: config.maxOverflowRetries ?? 1,
+    appendOnly: config.appendOnly ?? false,
     modelPolicies,
     auto: config.auto ?? true,
   })
@@ -134,6 +136,7 @@ export function resolveTargetPolicy(
     maxTokens: override?.maxTokens ?? config.maxTokens,
     compactionRetries: override?.compactionRetries ?? config.compactionRetries,
     maxOverflowRetries: override?.maxOverflowRetries ?? config.maxOverflowRetries,
+    appendOnly: override?.appendOnly ?? config.appendOnly,
   })
 }
 
@@ -218,6 +221,7 @@ export function resolveCompactSpec(
     maxTokens: policy.maxTokens,
     compactionRetries: policy.compactionRetries,
     maxOverflowRetries: policy.maxOverflowRetries,
+    appendOnly: policy.appendOnly,
   })
 }
 
@@ -303,6 +307,9 @@ function validatePolicy(
   }
   if (maxOverflowRetries !== undefined) {
     assertNonNegativeInteger(`${name}.maxOverflowRetries`, maxOverflowRetries)
+  }
+  if (config.appendOnly !== undefined && typeof config.appendOnly !== 'boolean') {
+    throw new Error(`${name}.appendOnly must be a boolean`)
   }
 
   validateSummarizationPair(config, name)
