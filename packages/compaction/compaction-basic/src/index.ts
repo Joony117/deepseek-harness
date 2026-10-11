@@ -190,6 +190,12 @@ export class BasicCompactionEngine extends CompactionEngine {
   private readonly warnedPressureConfigTargets = new Set<string>()
   private readonly overflowRetries = new WeakMap<Agent, number>()
   private readonly overflowAgents = new WeakMap<Session, Agent>()
+  /**
+   * Pressure at which an automatic attempt last failed to bring a session
+   * below threshold (#7212 rejected summary, #5669 still above threshold).
+   * Process-local; a restart retries once early.
+   */
+  private readonly pressureBackoff = new WeakMap<Session, { targetKey: string; totalTokens: number }>()
 
   constructor(ctx: Context, config: BasicCompactionConfig = {}) {
     super(ctx)
@@ -409,7 +415,10 @@ export class BasicCompactionEngine extends CompactionEngine {
       info.context.contextWindow,
       reservedCompletionTokens(header, info.defaultMaxTokens),
     )
-    if (measurement.totalTokens < spec.thresholdTokens) return null
+    if (measurement.totalTokens < spec.thresholdTokens) {
+      this.pressureBackoff.delete(agent.session)
+      return null
+    }
 
     // Once pressure qualifies, land the model-free pass before choosing a
     // summary range, then remeasure through the singleton replay fold.
@@ -417,27 +426,51 @@ export class BasicCompactionEngine extends CompactionEngine {
       prune.pruneSession(agent.session)
       measurement = meter.measure(agent.session, header)
     }
-    if (measurement.totalTokens < spec.thresholdTokens) return null
-
-    let result: CompactionResult | null = null
-    for (let attempt = 0; attempt <= spec.compactionRetries; attempt += 1) {
-      const range = selectCompactableRange(agent.session, measurement, spec.retainTokens)
-      if (range === null) {
-        if (result === null && !requireBelowThreshold) return null
-        throw new Error(
-          'no safe compaction range can reduce context below threshold '
-          + `(${measurement.totalTokens} estimated tokens >= threshold ${spec.thresholdTokens})`,
-        )
-      }
-      result = await this.compactRegion(range.start, range.end, agent, signal)
-      measurement = meter.measure(agent.session, header)
-      if (measurement.totalTokens < spec.thresholdTokens) return result
+    if (measurement.totalTokens < spec.thresholdTokens) {
+      this.pressureBackoff.delete(agent.session)
+      return null
     }
 
-    throw new Error(
-      `compaction still above threshold after ${spec.compactionRetries + 1} compaction attempts `
-      + `(${measurement.totalTokens} estimated tokens >= threshold ${spec.thresholdTokens})`,
-    )
+    // After a non-converging attempt, wait for real growth instead of paying
+    // for the same summary again on every tool step. A model-switch check
+    // (requireBelowThreshold) must still prove the destination fits, so it
+    // neither reads nor writes the backoff.
+    // ponytail: fixed 5% of the window (max 32K); make it a policy field if routes need tuning.
+    const backoff = requireBelowThreshold ? undefined : this.pressureBackoff.get(agent.session)
+    const growthTokens = Math.max(1, Math.min(Math.floor(spec.contextWindow * 0.05), 32_768))
+    if (backoff?.targetKey === targetKey
+      && measurement.totalTokens < backoff.totalTokens + growthTokens) return null
+
+    let result: CompactionResult | null = null
+    try {
+      for (let attempt = 0; attempt <= spec.compactionRetries; attempt += 1) {
+        const range = selectCompactableRange(agent.session, measurement, spec.retainTokens)
+        if (range === null) {
+          if (result === null && !requireBelowThreshold) return null
+          throw new Error(
+            'no safe compaction range can reduce context below threshold '
+            + `(${measurement.totalTokens} estimated tokens >= threshold ${spec.thresholdTokens})`,
+          )
+        }
+        result = await this.compactRegion(range.start, range.end, agent, signal)
+        measurement = meter.measure(agent.session, header)
+        if (measurement.totalTokens < spec.thresholdTokens) {
+          this.pressureBackoff.delete(agent.session)
+          return result
+        }
+      }
+
+      throw new Error(
+        `compaction still above threshold after ${spec.compactionRetries + 1} compaction attempts `
+        + `(${measurement.totalTokens} estimated tokens >= threshold ${spec.thresholdTokens})`,
+      )
+    } catch (error: unknown) {
+      // A failed attempt leaves the surface unchanged, so `measurement` is current.
+      if (!signal.aborted && !requireBelowThreshold) {
+        this.pressureBackoff.set(agent.session, { targetKey, totalTokens: measurement.totalTokens })
+      }
+      throw error
+    }
   }
 
   /**
