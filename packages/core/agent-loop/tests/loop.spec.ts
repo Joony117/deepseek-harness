@@ -719,6 +719,10 @@ describe('agent loop', () => {
     expect(changedBlock?.type).toBe('text')
     if (changedBlock?.type !== 'text') throw new Error('changed runtime context is not text')
     expect(changedBlock.text).toContain('danger-full-access')
+    // The fresh session's snapshot precedes its prompt; later ones follow theirs.
+    expect(agent.session.snapshotEvents().flatMap(event =>
+      event.type === 'user/message' ? [event.data.source.kind] : [])).toEqual(
+      ['runtime-context', 'user', 'user', 'user', 'runtime-context'])
 
     dispose()
     send(agent, 'cleared')

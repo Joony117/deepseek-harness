@@ -273,11 +273,14 @@ export class ReactLoopAgent implements Agent {
     signal.throwIfAborted()
     const sections = renderContextSections(assembly)
     const context = this.runtimeContext.project(joinContextSections(sections), sections)
+    // A fresh session's first snapshot precedes its prompt, so sessions sharing
+    // a workspace share a cacheable prefix; later snapshots follow history.
+    const fresh = this.session.surface.nodes.length === 0
     const decision = await this.dispatch.waterfall(
       'agent/pre-step', { messages: claimed, ...position, signal },
       (): Promise<PreStepDecision> => Promise.resolve<PreStepDecision>({
         kind: 'enter',
-        messages: context === undefined ? claimed : [...claimed, context],
+        messages: context === undefined ? claimed : fresh ? [context, ...claimed] : [...claimed, context],
       }),
     )
     signal.throwIfAborted()
