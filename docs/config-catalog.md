@@ -3309,6 +3309,10 @@ export interface Config {
 export interface Config {
   /** Provider name on `ctx.subagents` (default `fork`). */
   providerName: string
+  /** Most model steps one child may enter; omit for no step cap. */
+  maxSteps?: number
+  /** Wall-clock milliseconds one child may run before it is cancelled; omit for no deadline. */
+  deadlineMs?: number
 }
 ```
 <!-- END GENERATED config-catalog:@deepseek-ai/dsh-subagent-fork-in-process -->
@@ -3326,6 +3330,10 @@ export interface Config {
 export interface Config {
   /** Provider name on `ctx.subagents` (default `spawn`). */
   providerName: string
+  /** Most model steps one child may enter; omit for no step cap. */
+  maxSteps?: number
+  /** Wall-clock milliseconds one child may run before it is cancelled; omit for no deadline. */
+  deadlineMs?: number
 }
 ```
 <!-- END GENERATED config-catalog:@deepseek-ai/dsh-subagent-spawn-in-process -->

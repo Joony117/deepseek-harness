@@ -14,7 +14,7 @@ import type {
   SubagentCapabilities,
   SubagentProvider,
 } from '@deepseek-ai/dsh-subagent'
-import { startInProcessRun } from '@deepseek-ai/dsh-subagent-in-process-driver'
+import { startInProcessRun, type InProcessRunLimits } from '@deepseek-ai/dsh-subagent-in-process-driver'
 
 export const name = 'subagent-spawn-in-process'
 // `tools` is deliberately not injected: the child factory already provides it during setup,
@@ -25,10 +25,16 @@ export const inject = ['subagents']
 export interface Config {
   /** Provider name on `ctx.subagents` (default `spawn`). */
   providerName: string
+  /** Most model steps one child may enter; omit for no step cap. */
+  maxSteps?: number
+  /** Wall-clock milliseconds one child may run before it is cancelled; omit for no deadline. */
+  deadlineMs?: number
 }
 
 export const Config: z<Config> = z.object({
   providerName: z.string().default('spawn'),
+  maxSteps: z.number().step(1).min(1).max(Number.MAX_SAFE_INTEGER),
+  deadlineMs: z.number().step(1).min(1).max(2 ** 31 - 1),
 })
 
 /**
@@ -49,13 +55,13 @@ class SpawnInProcessProvider implements SubagentProvider {
   // Context contract: a spawned child starts fresh — it never sees the parent conversation.
   readonly inheritsParentContext = false
 
-  constructor(readonly name: string) {}
+  constructor(readonly name: string, private readonly limits: InProcessRunLimits) {}
 
   start(request: ResolvedSubagentStartRequest) {
     // Fresh child: no seed. The shared driver mints ids, stamps cwd/lineage/
     // depth, drives the one-shot (including the structured capture when the
     // request carries an outputSchema), and maps the result.
-    return startInProcessRun(request, {})
+    return startInProcessRun(request, { limits: this.limits })
   }
 
   prepareContinuable(): Promise<ContinuableCreateSpec> {
@@ -66,5 +72,8 @@ class SpawnInProcessProvider implements SubagentProvider {
 }
 
 export function apply(ctx: Context, config: Config): void {
-  ctx.subagents.registerProvider(new SpawnInProcessProvider(config.providerName))
+  ctx.subagents.registerProvider(new SpawnInProcessProvider(config.providerName, {
+    maxSteps: config.maxSteps,
+    deadlineMs: config.deadlineMs,
+  }))
 }

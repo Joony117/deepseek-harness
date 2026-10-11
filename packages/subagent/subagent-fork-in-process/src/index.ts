@@ -18,7 +18,7 @@ import type {
   SubagentCapabilities,
   SubagentProvider,
 } from '@deepseek-ai/dsh-subagent'
-import { startInProcessRun } from '@deepseek-ai/dsh-subagent-in-process-driver'
+import { startInProcessRun, type InProcessRunLimits } from '@deepseek-ai/dsh-subagent-in-process-driver'
 
 export const name = 'subagent-fork-in-process'
 // `tools` is deliberately NOT injected — same rationale as subagent-spawn-in-process: the
@@ -31,10 +31,16 @@ export const inject = ['subagents']
 export interface Config {
   /** Provider name on `ctx.subagents` (default `fork`). */
   providerName: string
+  /** Most model steps one child may enter; omit for no step cap. */
+  maxSteps?: number
+  /** Wall-clock milliseconds one child may run before it is cancelled; omit for no deadline. */
+  deadlineMs?: number
 }
 
 export const Config: z<Config> = z.object({
   providerName: z.string().default('fork'),
+  maxSteps: z.number().step(1).min(1).max(Number.MAX_SAFE_INTEGER),
+  deadlineMs: z.number().step(1).min(1).max(2 ** 31 - 1),
 })
 
 /**
@@ -71,11 +77,12 @@ class ForkInProcessProvider implements SubagentProvider {
   // Context contract: a forked child IS seeded with the parent's completed-turn prefix.
   readonly inheritsParentContext = true
 
-  constructor(readonly name: string) {}
+  constructor(readonly name: string, private readonly limits: InProcessRunLimits) {}
 
   start(request: ResolvedSubagentStartRequest) {
     const seed = completedTurnPrefix(request.parent)
     return startInProcessRun(request, {
+      limits: this.limits,
       // Only pass a seed when there's a completed turn to inherit; an empty seed
       // is equivalent to a fresh child, so omit it to keep the session unseeded.
       ...seed.length > 0 ? { seed } : {},
@@ -92,5 +99,8 @@ class ForkInProcessProvider implements SubagentProvider {
 }
 
 export function apply(ctx: Context, config: Config): void {
-  ctx.subagents.registerProvider(new ForkInProcessProvider(config.providerName))
+  ctx.subagents.registerProvider(new ForkInProcessProvider(config.providerName, {
+    maxSteps: config.maxSteps,
+    deadlineMs: config.deadlineMs,
+  }))
 }

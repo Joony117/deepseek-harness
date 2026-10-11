@@ -9,6 +9,7 @@ import type { GoalView } from '@deepseek-ai/dsh-goal'
 import { createUserMessage, LlmAdapter, LlmError  } from '@deepseek-ai/dsh-llm'
 import type { GenerateOptions, StreamChunk } from '@deepseek-ai/dsh-llm'
 import type { ContextFormed } from '@deepseek-ai/dsh-llm'
+import type { JobEventListener, JobView } from '@deepseek-ai/dsh-jobs'
 import { SessionId } from '@deepseek-ai/dsh-session'
 import type { UserMessage } from '@deepseek-ai/dsh-session'
 import * as goalSession from '../src/index.ts'
@@ -216,6 +217,34 @@ describe('same-session goal driving', () => {
     expect(requestText(test.adapter.requests[1]!)).toContain('Round: 2/2')
     expect(test.agent.session.snapshotEvents().flatMap(event =>
       event.type === 'request/header' ? [event.data.reason] : [])).toEqual(['initial', 'series'])
+  })
+
+  it('waits for owned background jobs to settle before starting a round', async () => {
+    const test = await harness([textResponse('round one')])
+    const owner = test.agent.session.id
+    const jobs: Pick<JobView, 'owner' | 'status'>[] = [
+      { owner, status: 'running' },
+      { owner: undefined, status: 'running' },
+    ]
+    const listeners: JobEventListener[] = []
+    test.ctx.provide('jobs', {
+      list: () => jobs,
+      events: { subscribe: (_filter: unknown, listener: JobEventListener) => { listeners.push(listener); return () => {} } },
+    } as never)
+    await vi.waitFor(() => { expect(listeners).toHaveLength(1) })
+
+    test.ctx.goals.create(test.agent, { objective: 'wait for the child', maxGoalRounds: 1 })
+    await new Promise(resolve => setTimeout(resolve, 30))
+    expect(test.adapter.requests).toHaveLength(0)
+
+    // Unowned and foreign settlements carry no wake for this goal.
+    listeners[0]!({ type: 'removed', job: { owner } } as never)
+    listeners[0]!({ type: 'settled', job: { owner: undefined } } as never)
+    listeners[0]!({ type: 'settled', job: { owner: SessionId('gone') } } as never)
+    jobs[0] = { owner, status: 'completed' }
+    listeners[0]!({ type: 'settled', job: jobs[0] } as never)
+    await waitForRequests(test.adapter, 1)
+    expect(requestText(test.adapter.requests[0]!)).toContain('Round: 1/1')
   })
 
   it('never adopts activation from an already-live driver and waits for explicit resume', async () => {
