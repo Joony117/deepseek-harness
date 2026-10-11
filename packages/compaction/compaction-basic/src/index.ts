@@ -11,7 +11,7 @@ import { CompactionEngine, CompactionId, ManualCompactionError } from '@deepseek
 import type { CompactionResult, CompactionTrigger } from '@deepseek-ai/dsh-compaction'
 import { SessionSeq } from '@deepseek-ai/dsh-session'
 import type { Session } from '@deepseek-ai/dsh-session'
-import { CONTEXT_WINDOW_EXCEEDED_CODE } from '@deepseek-ai/dsh-llm'
+import { CONTEXT_WINDOW_EXCEEDED_CODE, createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { LlmCallConfig } from '@deepseek-ai/dsh-llm'
 import { assertNever } from '@deepseek-ai/dsh-util-values'
 import type { Agent, PreStepDecision } from '@deepseek-ai/dsh-agent'
@@ -29,7 +29,7 @@ import {
   compactSurfaceRegion,
   selectCompactableRange,
 } from './region.ts'
-import { summarizeWithLlm } from './summarizer.ts'
+import { COMPACTION_INSTRUCTION, summarizeWithLlm } from './summarizer.ts'
 import type { SummarizationInput, SummaryResult } from './summarizer.ts'
 import type {
   BasicCompactionConfig,
@@ -136,6 +136,9 @@ function inspectAutomaticFailure(session: Session, from: number): AutomaticFailu
   return { turn, traced }
 }
 
+/** Smallest summary cap worth replaying the whole surface for on an append-only route. */
+const MIN_SUMMARY_ROOM_TOKENS = 8192
+
 const thresholdRatioSchema = z.number()
 const headroomTokensSchema = z.number().step(1).min(0)
 const retainRatioSchema = z.number()
@@ -145,6 +148,7 @@ const summarizationModelSchema = z.string()
 const maxTokensSchema = z.number().step(1).min(1)
 const compactionRetriesSchema = z.number().step(1).min(0)
 const maxOverflowRetriesSchema = z.number().step(1).min(0)
+const appendOnlySchema = z.boolean()
 
 const modelPolicy: z<ModelCompactPolicyConfig> = z.object({
   provider: z.string().required(),
@@ -158,6 +162,7 @@ const modelPolicy: z<ModelCompactPolicyConfig> = z.object({
   maxTokens: maxTokensSchema,
   compactionRetries: compactionRetriesSchema,
   maxOverflowRetries: maxOverflowRetriesSchema,
+  appendOnly: appendOnlySchema,
 })
 
 /**
@@ -181,6 +186,7 @@ export class BasicCompactionEngine extends CompactionEngine {
     maxTokens: maxTokensSchema,
     compactionRetries: compactionRetriesSchema,
     maxOverflowRetries: maxOverflowRetriesSchema,
+    appendOnly: appendOnlySchema,
     modelPolicies: z.array(modelPolicy),
     auto: z.boolean(),
   })
@@ -329,7 +335,48 @@ export class BasicCompactionEngine extends CompactionEngine {
     const config = target === undefined
       ? this.config
       : resolveTargetPolicy(this.config, target)
-    return summarizeWithLlm(this.ctx, config, input, agent, signal)
+    const room = config.appendOnly && target !== undefined && input.surface !== undefined
+      ? await this.appendOnlyRoom(config, agent, target, signal)
+      : undefined
+    if (room === undefined || input.surface === undefined) {
+      return summarizeWithLlm(this.ctx, config, input, agent, signal)
+    }
+    return summarizeWithLlm(this.ctx, { ...config, maxTokens: room }, { ...input, messages: input.surface }, agent, signal)
+  }
+
+  /**
+   * Output room left when the summary replays the whole surface, so an
+   * append-only server extends its cache instead of re-reading from an early
+   * checkpoint. The shadowed-region replay instead cuts the prompt short and
+   * puts the directive where the next message was, so such a server falls back
+   * to an early checkpoint (10,777 of 47,909 tokens reused in one ninfer run).
+   * @returns the summary token cap for the whole-surface form, or `undefined`
+   * to keep the shadowed-region form (another summary model, or too little room).
+   */
+  private async appendOnlyRoom(
+    config: { summarizationProvider: string; maxTokens: number },
+    agent: Agent,
+    target: Pick<LlmCallConfig, 'provider' | 'model'>,
+    signal?: AbortSignal,
+  ): Promise<number | undefined> {
+    if (config.summarizationProvider.length > 0) return undefined
+    let contextWindow: number | undefined
+    try {
+      contextWindow = (await this.ctx.llm.resolveModelInfo(target.provider, target.model, signal)).context?.contextWindow
+    } catch {
+      // Advisory, like the summarizer's own capability lookup: fall back to the region form.
+      return undefined
+    }
+    if (contextWindow === undefined) return undefined
+    const meter = this.ctx.tokenMeter
+    const prompt = meter.measure(agent.session).totalTokens
+      + meter.estimateMessage(createUserMessage({
+        content: [{ type: 'text', text: COMPACTION_INSTRUCTION }],
+        source: { kind: 'user' },
+      }))
+    const room = Math.min(config.maxTokens, contextWindow - prompt)
+    // ponytail: fixed floor; a checkpoint is a few thousand tokens. Make it a policy field if one runs out.
+    return room >= Math.min(config.maxTokens, MIN_SUMMARY_ROOM_TOKENS) ? room : undefined
   }
 
   /**
@@ -398,8 +445,12 @@ export class BasicCompactionEngine extends CompactionEngine {
     }
 
     // Once pressure qualifies, land the model-free pass before choosing a
-    // summary range, then remeasure through the singleton replay fold.
-    if (prune !== undefined) {
+    // summary range, then remeasure through the singleton replay fold. An
+    // append-only route skips it: trimming an old result rewrites the middle of
+    // the prompt, so the server re-reads everything after it with no summary to
+    // show for it. There the trim waits until a summary has already broken the
+    // prefix (below).
+    if (prune !== undefined && !spec.appendOnly) {
       prune.pruneSession(agent.session)
       measurement = meter.measure(agent.session)
     }
@@ -427,6 +478,7 @@ export class BasicCompactionEngine extends CompactionEngine {
           break
         }
         result = await this.compactRegion(range.start, range.end, agent, signal)
+        if (spec.appendOnly && prune !== undefined) prune.pruneSession(agent.session)
         measurement = meter.measure(agent.session)
         if (measurement.totalTokens < spec.thresholdTokens) {
           this.pressureBackoff.delete(agent.session)
