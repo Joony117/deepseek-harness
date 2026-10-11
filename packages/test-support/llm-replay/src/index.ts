@@ -478,20 +478,15 @@ export function deriveReplayScript(events: SessionEvent[]): ReplayEntry[] {
       const persisted: {
         readonly llmStreamCall?: true
         readonly rawOutput?: ContentBlock[]
+        readonly rejectedOutput?: ContentBlock[]
         readonly usage?: TokenUsage
       } = event.data
       if (persisted.llmStreamCall === true) {
         if (persisted.rawOutput === undefined) {
           throw new Error('llm-replay: compaction/summary marks an LLM stream call without rawOutput')
         }
-        const chunks: StreamChunk[] = []
-        for (const [index, block] of persisted.rawOutput.entries()) {
-          chunks.push({ type: 'block-start', index, blockType: block.type })
-          chunks.push({ type: 'block-end', index, block })
-        }
-        if (persisted.usage !== undefined) chunks.push({ type: 'usage', usage: persisted.usage })
-        chunks.push({ type: 'finish', reason: { kind: 'stop' } })
-        script.push({ kind: 'chunks', chunks })
+        if (persisted.rejectedOutput !== undefined) script.push(blocksEntry(persisted.rejectedOutput))
+        script.push(blocksEntry(persisted.rawOutput, persisted.usage))
       }
       continue
     }
@@ -500,6 +495,18 @@ export function deriveReplayScript(events: SessionEvent[]): ReplayEntry[] {
     close(`${String(event.data.turn)}/${String(event.data.step)}`, chunks)
   }
   return script
+}
+
+/** A successful replayed call that emits exactly the given output blocks. */
+function blocksEntry(blocks: readonly ContentBlock[], usage?: TokenUsage): ReplayEntry {
+  const chunks: StreamChunk[] = []
+  for (const [index, block] of blocks.entries()) {
+    chunks.push({ type: 'block-start', index, blockType: block.type })
+    chunks.push({ type: 'block-end', index, block })
+  }
+  if (usage !== undefined) chunks.push({ type: 'usage', usage })
+  chunks.push({ type: 'finish', reason: { kind: 'stop' } })
+  return { kind: 'chunks', chunks }
 }
 
 /**

@@ -333,10 +333,14 @@ export function apply(ctx: Context, config: Config): void {
     if (desired === undefined || decision.messages.some(message => sameContextPayload(message, desired))) {
       return decision
     }
-    // Fold the context right after the claimed batch, so the direct prompt
-    // precedes it and the driver-appended runtime context follows it.
-    const lastClaimedIndex = decision.messages.findLastIndex(message => messages.includes(message))
-    const entered = decision.messages.toSpliced(lastClaimedIndex + 1, 0, desired)
+    // A fresh session leads with its instructions, after only any claimed
+    // context they correct, so sessions in one workspace share a cacheable
+    // prefix. Later context folds right after the claimed batch: the direct
+    // prompt precedes it and the runtime context follows it.
+    const fresh = agent.session.surface.nodes.length === 0
+    const at = decision.messages.findLastIndex(message => messages.includes(message)
+      && (!fresh || isAgentInstructionsMessage(message))) + 1
+    const entered = decision.messages.toSpliced(at, 0, desired)
     return { ...decision, messages: entered }
   })
 

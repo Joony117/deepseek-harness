@@ -20,7 +20,7 @@ import { credentialRef } from '@deepseek-ai/dsh-credentials'
 import type { CredentialRef } from '@deepseek-ai/dsh-credentials'
 import { MAX_TIMER_DELAY_MS } from '@deepseek-ai/dsh-timeout'
 import { resolveRetryPolicy, RetryPolicySchema } from '@deepseek-ai/dsh-llm'
-import type { ResolvedRetryPolicy, RetryPolicyConfig } from '@deepseek-ai/dsh-llm'
+import type { PromptCacheReuse, ResolvedRetryPolicy, RetryPolicyConfig } from '@deepseek-ai/dsh-llm'
 import { deepEqualJson } from '@deepseek-ai/dsh-util-values'
 import {
   CACHE_CONTROL_FORMATS,
@@ -156,6 +156,17 @@ export interface PiAiProviderProfile {
   thinkingBudgets?: ThinkingBudgets
   /** Prompt-cache retention preference. */
   cacheRetention?: CacheRetention
+  /**
+   * Send top-level `preserve_thinking: true` on OpenAI Chat Completions requests, so a
+   * server whose template drops earlier turns' thinking (such as Qwen on ninfer) keeps it
+   * and each request stays a pure append of the last. Costs prompt tokens for kept thinking.
+   */
+  preserveThinking?: boolean
+  /**
+   * How this route's server reuses its prompt cache, declared on every model's info.
+   * `append-only` (such as ninfer) makes compaction keep requests pure appends.
+   */
+  promptCache?: PromptCacheReuse
   /** Streaming transport preference. */
   transport?: Transport
   /** HTTP/provider SDK timeout in milliseconds. */
@@ -338,6 +349,8 @@ const profile = z.object({
   reasoning: z.union(THINKING_LEVELS),
   thinkingBudgets,
   cacheRetention: z.union(['none', 'short', 'long']),
+  preserveThinking: z.boolean(),
+  promptCache: z.union(['append-only']),
   transport: z.union(['sse', 'websocket', 'websocket-cached', 'auto']),
   timeoutMs: z.natural(),
   websocketConnectTimeoutMs: z.natural(),

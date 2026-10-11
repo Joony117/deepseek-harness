@@ -8,6 +8,7 @@ import { FiberState } from '@deepseek-ai/cordis'
 import type { Context } from '@deepseek-ai/cordis'
 import type { Agent, PreStepDecision } from '@deepseek-ai/dsh-agent'
 import type { GoalMessageSource, GoalRef, GoalView } from '@deepseek-ai/dsh-goal'
+import type {} from '@deepseek-ai/dsh-jobs'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { ContentBlock, MessageId, MessageSource } from '@deepseek-ai/dsh-llm'
 import type { Session, SessionEvent, UserMessage } from '@deepseek-ai/dsh-session'
@@ -99,6 +100,16 @@ export function apply(ctx: Context): void {
     return ctx.goals.get(state.agent)
   }
 
+  /**
+   * Whether the agent still owns background work. An idle parent whose
+   * background subagent or command is running is waiting, not done: a round
+   * now would spend a model request without the result the parent awaits.
+   */
+  function ownsRunningJobs(agent: Agent): boolean {
+    return ctx.get('jobs')?.list(agent.session.id).some(job =>
+      job.owner === agent.session.id && (job.status === 'running' || job.status === 'stopping')) ?? false
+  }
+
   /** Whether this exact lifecycle is quiescent with no competing prompt. */
   function readyToDrive(state: DriverState): boolean {
     return ctx.fiber.state === FiberState.ACTIVE
@@ -106,6 +117,7 @@ export function apply(ctx: Context): void {
       && ctx.agents.get(state.agent.id) === state.agent
       && state.agent.status === 'idle'
       && !state.competingQueued
+      && !ownsRunningJobs(state.agent)
   }
 
   /** Recheck every condition that an awaited checkpoint may have changed. */
@@ -239,6 +251,17 @@ export function apply(ctx: Context): void {
       retire()
     })
   }
+
+  // The last owned job settling is the quiescence the idle edge could not
+  // see; re-check so a wake budget or inject delivery cannot strand the goal.
+  ctx.inject(['jobs'], (jobsCtx) => {
+    // The registry scopes this listener to the subscribing context's lifetime.
+    jobsCtx.jobs.events.subscribe({ owners: 'scope' }, (event) => {
+      if (event.type !== 'settled' || event.job.owner === undefined) return
+      const agent = ctx.agents.get(event.job.owner)
+      if (agent !== undefined) requestDrive(stateFor(agent))
+    })
+  })
 
   // One composite effect keeps the step fence installed until this
   // plugin's own scheduling tasks settle.

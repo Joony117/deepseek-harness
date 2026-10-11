@@ -10,7 +10,7 @@ import type { LlmCallConfig } from '@deepseek-ai/dsh-llm'
 export interface CompactionPolicyConfig {
   /** Window fraction for pressure; capped at context window minus reserved output and `headroomTokens`. Defaults to `0.8`. */
   thresholdRatio?: number
-  /** Additional pressure headroom beyond the routed output reservation. Non-negative integer; defaults to `65536`. */
+  /** Additional pressure headroom beyond the routed output reservation. Non-negative integer; defaults to 10% of `W - O`, max `65536`. */
   headroomTokens?: number
   /** Recent context retained as a fraction of context window minus reserved output tokens. Defaults to `0.16`. */
   retainRatio?: number
@@ -20,12 +20,18 @@ export interface CompactionPolicyConfig {
   summarizationProvider?: string
   /** Summary model; set together with `summarizationProvider`, or inherit the conversation target. */
   summarizationModel?: string
-  /** Provider generation cap for summarization. Defaults to the resolved `headroomTokens`; an explicit cap must be positive. */
+  /** Provider generation cap for summarization. Defaults to `65536`, independent of `headroomTokens`; an explicit cap must be positive. */
   maxTokens?: number
   /** Extra attempts after the first compaction when pressure remains above threshold. Defaults to `1`. */
   compactionRetries?: number
   /** Maximum retries after canonical context overflow; `0` disables recovery. Defaults to `1`. */
   maxOverflowRetries?: number
+  /**
+   * The route's prompt cache only survives a request that purely extends the previous one
+   * (a recurrent-state server such as ninfer). Pressure then never trims tool results on
+   * its own, and the summary request replays the whole last prompt. Defaults to `false`.
+   */
+  appendOnly?: boolean
 }
 
 /** Exact provider/model override merged over the default compaction policy. */
@@ -52,12 +58,14 @@ export type ResolvedRetention =
 /** Validated policy fields shared before and after exact-target matching. */
 interface ResolvedPolicyFields {
   readonly thresholdRatio: number
-  readonly headroomTokens: number
+  /** `undefined` resolves per target from its message budget. */
+  readonly headroomTokens: number | undefined
   readonly summarizationProvider: string
   readonly summarizationModel: string
   readonly maxTokens: number
   readonly compactionRetries: number
   readonly maxOverflowRetries: number
+  readonly appendOnly: boolean
 }
 
 /** Validated immutable config whose target-specific defaults remain unresolved. */

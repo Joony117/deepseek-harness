@@ -406,6 +406,14 @@ export type SystemPromptUpdate = 'in-history'
  */
 export type ToolUpdate = 'in-history' | 'addition-only'
 
+/**
+ * How a provider reuses its prompt cache across requests.
+ * `'append-only'`: only a request that purely extends the previous one reuses
+ * it (a recurrent-state server such as ninfer); rewriting any earlier message
+ * re-reads the prompt from an early checkpoint. Absent means unknown.
+ */
+export type PromptCacheReuse = 'append-only'
+
 /** Exact-route model metadata resolved by its owning adapter. */
 export interface LlmResolvedModelInfo extends LlmModelInfo {
   /** Provider-owned context capacity when known. */
@@ -418,6 +426,8 @@ export interface LlmResolvedModelInfo extends LlmModelInfo {
   systemPromptUpdate?: SystemPromptUpdate
   /** Declared mid-conversation tool declaration handling; absent means every request declares the complete tool list. */
   toolUpdate?: ToolUpdate
+  /** Declared prompt-cache reuse shape; absent means unknown. */
+  promptCache?: PromptCacheReuse
 }
 
 /**

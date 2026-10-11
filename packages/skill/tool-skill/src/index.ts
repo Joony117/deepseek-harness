@@ -244,8 +244,9 @@ export function apply(ctx: Context, config: Config = {}): void {
       : renderCatalogMessage(entries)
     return {
       ...decision,
+      // A fresh session leads with its catalog: a prefix shared across sessions.
       messages: existing === undefined
-        ? [...decision.messages, catalog]
+        ? agent.session.surface.nodes.length === 0 ? [catalog, ...decision.messages] : [...decision.messages, catalog]
         : decision.messages.map(message => message.id === existing.message.id ? catalog : message),
     }
   })

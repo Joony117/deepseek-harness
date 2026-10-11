@@ -278,7 +278,9 @@ describe('dsh-tool-team', () => {
     } else {
       expect(JSON.stringify(childRequest.messages)).not.toContain('Parent task')
     }
-    expect(childRequest.messages.at(-1)?.content.slice(0, 2)).toEqual([
+    // A fresh child's runtime context leads its batch; a fork's follows it.
+    expect(childRequest.messages.at(-1)?.content.filter(block =>
+      !(block.type === 'text' && block.text.startsWith('Current runtime context.'))).slice(0, 2)).toEqual([
       { type: 'text', text: '<system-reminder>\nYou are teammate "reviewer".\nYour Team Lead is named "lead".\nUse list_agents({}) to find your teammates and their names.\nTo message your Team Lead, use send_message({ target: "lead", message: "..." }).\nTo message another teammate, use send_message({ target: "<teammate name>", message: "..." }).\n</system-reminder>\n\n' },
       { type: 'text', text: 'Review the work' },
     ])
@@ -379,7 +381,7 @@ describe('dsh-tool-team', () => {
     await waitNoAgent(ctx, childId)
     const reminder = '<system-reminder>\nYou are teammate "reviewer".\nYour Team Lead is named "lead".\nUse list_agents({}) to find your teammates and their names.\nTo message your Team Lead, use send_message({ target: "lead", message: "..." }).\nTo message another teammate, use send_message({ target: "<teammate name>", message: "..." }).\n</system-reminder>\n\n'
     const first = serializeRequest(adapter.requests[0]!).messages
-    expect(first.at(-1)?.content.slice(0, 2)).toEqual([{ type: 'text', text: reminder }, { type: 'text', text: 'Review the work' }])
+    expect(first.at(-1)?.content.slice(-2)).toEqual([{ type: 'text', text: reminder }, { type: 'text', text: 'Review the work' }])
     expect(adapter.requests[1]!.messages.filter(message => message.content.some(block =>
       block.type === 'text' && block.text === reminder))).toHaveLength(1)
     expect(JSON.stringify(serializeRequest(adapter.requests[2]!).messages)).not.toContain('You are teammate')

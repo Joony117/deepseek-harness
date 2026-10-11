@@ -111,6 +111,11 @@ export interface PiAiAuthInjection {
   authContext: AuthContext
 }
 
+/** Add `preserve_thinking: true` to a Chat Completions body; other wire protocols pass through. */
+function preserveThinking(payload: unknown, model: { api: string }): unknown {
+  return model.api === 'openai-completions' ? { ...payload as object, preserve_thinking: true } : undefined
+}
+
 /** Copy profile stream knobs into pi-ai's common option vocabulary. */
 function profileOptions(
   profile: ResolvedPiAiProviderProfile,
@@ -123,6 +128,7 @@ function profileOptions(
     ...enabledReasoning === undefined ? {} : { reasoning: enabledReasoning },
     ...profile.thinkingBudgets === undefined ? {} : { thinkingBudgets: profile.thinkingBudgets },
     ...profile.cacheRetention === undefined ? {} : { cacheRetention: profile.cacheRetention },
+    ...profile.preserveThinking === true ? { onPayload: preserveThinking } : {},
     ...profile.transport === undefined ? {} : { transport: profile.transport },
     ...profile.timeoutMs === undefined ? {} : { timeoutMs: profile.timeoutMs },
     ...profile.websocketConnectTimeoutMs === undefined ? {} : { websocketConnectTimeoutMs: profile.websocketConnectTimeoutMs },
@@ -312,6 +318,7 @@ export class PiAiAdapter extends LlmAdapter {
       context: { contextWindow: resolvedModel.contextWindow },
       ...configuredMaxTokens === undefined ? {} : { defaultMaxTokens: configuredMaxTokens },
       ...reasoningInfo(resolvedModel, defaultLevel),
+      ...profile.promptCache === undefined ? {} : { promptCache: profile.promptCache },
     }
   }
 

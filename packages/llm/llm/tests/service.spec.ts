@@ -716,6 +716,7 @@ describe('LlmRuntime', () => {
     [{ provider: 'route', id: 'model', name: '' }, 'empty name'],
     [{ provider: 'route', id: 'model', name: 'Model', description: 1 }, 'non-string description'],
     [{ provider: 'route', id: 'model', name: 'Model', toolUpdate: 'sometimes' }, 'unknown tool update mode'],
+    [{ provider: 'route', id: 'model', name: 'Model', promptCache: 'sometimes' }, 'unknown prompt cache reuse'],
   ] as const)('rejects invalid exact model metadata (%s: %s)', async (metadata, _label) => {
     const ctx = new Context()
     await ctx.plugin(LlmRuntime)

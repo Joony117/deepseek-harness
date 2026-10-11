@@ -18,7 +18,7 @@ import { foldConsumedWork } from '@deepseek-ai/dsh-agent'
 import type { Agent, AgentHandle } from '@deepseek-ai/dsh-agent'
 import { SessionLogOffset } from '@deepseek-ai/dsh-session'
 import type { SessionEvent, SessionId, SessionLogOffset as SessionLogOffsetType, TurnEndReason } from '@deepseek-ai/dsh-session'
-import { createUserMessage, type ContentBlock } from '@deepseek-ai/dsh-llm'
+import { createUserMessage, type ContentBlock, type LlmFailure } from '@deepseek-ai/dsh-llm'
 import {
   appendDelegatedPolicyOverrides,
   applyChildComposition,
@@ -66,10 +66,46 @@ function toStopReason(reason: TurnEndReason | undefined): SubagentStopReason {
   }
 }
 
+/** Per-child execution budget; omitted fields leave that dimension unbounded. */
+export interface InProcessRunLimits {
+  /** Most model steps the child's turn may enter before it is stopped. */
+  readonly maxSteps?: number | undefined
+  /** Wall-clock milliseconds from publication before the child is cancelled. */
+  readonly deadlineMs?: number | undefined
+}
+
 /** Extra inputs the spawn and fork providers supply to the shared driver. */
 export interface InProcessRunOptions {
   /** Completed-turn seed for fork, or undefined for a fresh spawn. */
   readonly seed?: readonly SessionEvent[]
+  /** The provider's resolved per-child budget. */
+  readonly limits?: InProcessRunLimits
+}
+
+/** Diagnostic limit from the {@link SubagentResult.diagnostic} contract. */
+const MAX_DIAGNOSTIC_BYTES = 4096
+
+/** Render a logged model failure as bounded, payload-free diagnostic text. */
+function failureDiagnostic({ code, status, message }: LlmFailure): string {
+  const text = `${code}${status === undefined ? '' : ` (HTTP ${status})`}: ${message}`
+  const bytes = Buffer.from(text, 'utf8')
+  // A cut multi-byte character decodes as one 3-byte U+FFFD; the margin keeps the bound.
+  return bytes.length <= MAX_DIAGNOSTIC_BYTES
+    ? text
+    : `${bytes.subarray(0, MAX_DIAGNOSTIC_BYTES - 6).toString('utf8')}...`
+}
+
+/** Stop the child at the pre-step after its budget of entered steps is spent. */
+function attachStepLimit(childCtx: Context, maxSteps: number, onExceeded: () => void): void {
+  let entered = 0
+  childCtx.on('agent/pre-step', async (_event, next) => {
+    const decision = await next()
+    if (decision.kind === 'enter' && ++entered > maxSteps) {
+      onExceeded()
+      return { kind: 'reject' }
+    }
+    return decision
+  })
 }
 
 /** Error used when cancellation wins before the child publication boundary. */
@@ -119,6 +155,8 @@ export async function startInProcessRun(
   const inherited = captureDelegatedPolicyOverrides(parent)
 
   let structured: StructuredAttachment | undefined
+  const limits = options.limits ?? {}
+  const flags: RunFlags = { cancelled: false, limit: undefined }
   const setup = (childCtx: Context, child: Agent): void => {
     appendDelegatedPolicyOverrides(child.session, inherited)
     applyChildComposition(childCtx, parent, {
@@ -129,6 +167,12 @@ export async function startInProcessRun(
       structured = attachStructuredRuntime(childCtx, request.outputSchema)
     }
     attachDescriptorAppend(childCtx, request.descriptor)
+    const maxSteps = limits.maxSteps
+    if (maxSteps !== undefined) {
+      attachStepLimit(childCtx, maxSteps, () => {
+        flags.limit ??= `child stopped after its limit of ${maxSteps} model steps`
+      })
+    }
   }
 
   const handle = await parent.ctx.agents.create({
@@ -148,7 +192,16 @@ export async function startInProcessRun(
     childId,
     activationBoundary,
     structured,
+    flags,
+    limits.deadlineMs,
   )
+}
+
+/** Mutable run state shared by setup hooks and the run lifecycle. */
+interface RunFlags {
+  cancelled: boolean
+  /** Why a configured budget stopped the child, once one has. */
+  limit: string | undefined
 }
 
 /**
@@ -162,9 +215,10 @@ function drivePublishedRun(
   childId: SessionId,
   boundary: SessionLogOffsetType,
   structured: StructuredAttachment | undefined,
+  flags: RunFlags,
+  deadlineMs: number | undefined,
 ): SubagentRun {
   const child = handle.agent
-  const flags = { cancelled: false }
   const onAbort = (): void => {
     flags.cancelled = true
     child.cancel({ kind: 'parent' })
@@ -174,6 +228,12 @@ function drivePublishedRun(
   // post-registration check closes that handoff without treating an already
   // published child as a failed start.
   if (signal.aborted) onAbort()
+  const deadline = deadlineMs === undefined
+    ? undefined
+    : setTimeout(() => {
+      flags.limit ??= `child stopped at its ${deadlineMs}ms wall-clock deadline`
+      child.cancel({ kind: 'parent' })
+    }, deadlineMs)
 
   const result: Promise<SubagentResult> = (async () => {
     try {
@@ -181,13 +241,19 @@ function drivePublishedRun(
         child.followup(createUserMessage({ content: prompt, source: { kind: 'user' } }))
         await child.whenIdle()
       }
-      return readResult(
+      const settled = readResult(
         child,
         boundary,
         flags.cancelled,
         structured ? { captured: structured.captured() } : undefined,
       )
+      // A spent budget is a failure even when the cut-short turn reads as
+      // blocked or aborted; the caller keeps any partial output.
+      return flags.limit === undefined || flags.cancelled
+        ? settled
+        : { output: settled.output, stopReason: 'error', diagnostic: flags.limit }
     } finally {
+      clearTimeout(deadline)
       signal.removeEventListener('abort', onAbort)
     }
   })()
@@ -197,6 +263,7 @@ function drivePublishedRun(
     localAgent: child,
     result,
     async dispose(): Promise<void> {
+      clearTimeout(deadline)
       signal.removeEventListener('abort', onAbort)
       flags.cancelled = true
       const settlements = await Promise.allSettled([handle.dispose(), result])
@@ -228,11 +295,13 @@ function readResult(
   // Disposal can tear the owner down before the loop records its ordinary
   // `aborted` end, yielding `disposed` instead.
   const stopReason: SubagentStopReason = cancelled && recorded !== 'completed' ? 'aborted' : recorded
+  const reason = lastEnd?.data.reason
+  const diagnostic = reason?.kind === 'error' ? failureDiagnostic(reason.error) : undefined
   if (structured !== undefined) {
     if (structured.captured !== undefined) {
       return { output, structured: structured.captured.value, stopReason }
     }
     if (stopReason === 'completed') return { output, stopReason: cancelled ? 'aborted' : 'error' }
   }
-  return { output, stopReason }
+  return diagnostic === undefined ? { output, stopReason } : { output, stopReason, diagnostic }
 }
