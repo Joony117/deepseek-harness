@@ -1376,6 +1376,10 @@ describe('compaction region transaction', () => {
 
 class ScriptedAdapter extends LlmAdapter {
   lastOptions: GenerateOptions | undefined
+  /** Every request, in call order. */
+  readonly calls: GenerateOptions[] = []
+  /** Per-call outputs consumed before falling back to the constructor blocks. */
+  queued: (readonly ContentBlock[])[] = []
   usage: TokenUsage | undefined
   /** Reasoning levels this route advertises; absent keeps the model non-reasoning. */
   reasoningEfforts: readonly string[] | undefined
@@ -1404,7 +1408,9 @@ class ScriptedAdapter extends LlmAdapter {
 
   override async * stream(options: GenerateOptions): AsyncIterable<StreamChunk> {
     this.lastOptions = options
-    for (const [index, block] of this.blocks.entries()) {
+    this.calls.push(options)
+    const blocks = this.queued.shift() ?? this.blocks
+    for (const [index, block] of blocks.entries()) {
       yield { type: 'block-start', index, blockType: block.type }
       if (block.type === 'text') {
         yield { type: 'text-delta', index, text: block.text }
@@ -1427,6 +1433,7 @@ class ExposedCompactionEngine extends BasicCompactionEngine {
   ): Promise<{
     summary: ContentBlock[]
     rawOutput?: ContentBlock[]
+    rejectedOutput?: ContentBlock[]
     provider: string
     model: string
     maxTokens?: number
@@ -1453,6 +1460,23 @@ async function summarizerHarness(
 }
 
 describe('default one-shot summarizer', () => {
+  it('logs the rejected tool-call-only output with the summary that replaced it', async () => {
+    const call: ContentBlock = { type: 'tool-call', id: ToolCallId('call_1'), name: 'read', arguments: '{}' }
+    const { adapter, compact } = await summarizerHarness([{ type: 'text', text: 'summary' }])
+    adapter.queued = [[call]]
+    const session = conversation(3)
+    const nodes = [...session.surface.nodes]
+
+    await compact.compactRegion(nodes[0]!, nodes[1]!, agent(session, MODEL), SIGNAL)
+
+    const summary = session.snapshotEvents().findLast(event => event.type === 'compaction/summary')
+    expect(summary?.data).toMatchObject({
+      rawOutput: [{ type: 'text', text: 'summary' }],
+      llmStreamCall: true,
+      rejectedOutput: [call],
+    })
+  })
+
   it.each([undefined, '', 'SYSTEM HEAD\n精确前缀\n'])('preserves the routed prefix through region summarization with system %j', async (system) => {
     const { adapter, compact } = await summarizerHarness([{ type: 'text', text: 'summary' }])
     const session = conversation(3, undefined, system)
@@ -1801,10 +1825,39 @@ describe('default one-shot summarizer', () => {
     },
   )
 
-  it('rejects empty or reasoning-only successful output', async () => {
-    const { compact } = await summarizerHarness([{ type: 'reasoning', text: 'private' }])
+  it('re-asks once without replaying the output when the model answers with only a tool call', async () => {
+    const call: ContentBlock = { type: 'tool-call', id: ToolCallId('call_1'), name: 'read', arguments: '{}' }
+    const { adapter, compact } = await summarizerHarness([{ type: 'text', text: 'checkpoint' }])
+    adapter.queued = [[call]]
+    const tools = [{ name: 'read', description: 'r', parameters: { type: 'object' } }]
+
+    const result = await compact.runSummarize({ ...promptInput('history'), tools }, agent(conversation(1), MODEL))
+
+    expect(adapter.calls).toHaveLength(2)
+    const [first, second] = adapter.calls
+    expect(second?.tools).toEqual(tools)
+    expect(second?.messages.slice(0, -1)).toEqual(first?.messages)
+    const nudge = second?.messages.at(-1)?.content[0]
+    expect(nudge?.type === 'text' ? nudge.text : '').toContain('Tool calls are disabled')
+    expect(result.summary).toEqual([{ type: 'text', text: 'checkpoint' }])
+    expect(result.rawOutput).toEqual([{ type: 'text', text: 'checkpoint' }])
+    expect(result.rejectedOutput).toEqual([call])
+  })
+
+  it('fails after one re-ask when the model calls a tool again', async () => {
+    const call: ContentBlock = { type: 'tool-call', id: ToolCallId('call_1'), name: 'read', arguments: '{}' }
+    const { adapter, compact } = await summarizerHarness([call])
+
     await expect(compact.runSummarize(promptInput('history'), agent(conversation(1), MODEL)))
       .rejects.toThrow(/no text summary content/)
+    expect(adapter.calls).toHaveLength(2)
+  })
+
+  it('rejects empty or reasoning-only successful output', async () => {
+    const { adapter, compact } = await summarizerHarness([{ type: 'reasoning', text: 'private' }])
+    await expect(compact.runSummarize(promptInput('history'), agent(conversation(1), MODEL)))
+      .rejects.toThrow(/no text summary content/)
+    expect(adapter.calls).toHaveLength(1)
   })
 
   it('rejects image summary output instead of silently dropping it', async () => {
