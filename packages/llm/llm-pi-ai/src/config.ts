@@ -156,6 +156,12 @@ export interface PiAiProviderProfile {
   thinkingBudgets?: ThinkingBudgets
   /** Prompt-cache retention preference. */
   cacheRetention?: CacheRetention
+  /**
+   * Send top-level `preserve_thinking: true` on OpenAI Chat Completions requests, so a
+   * server whose template drops earlier turns' thinking (such as Qwen on ninfer) keeps it
+   * and each request stays a pure append of the last. Costs prompt tokens for kept thinking.
+   */
+  preserveThinking?: boolean
   /** Streaming transport preference. */
   transport?: Transport
   /** HTTP/provider SDK timeout in milliseconds. */
@@ -338,6 +344,7 @@ const profile = z.object({
   reasoning: z.union(THINKING_LEVELS),
   thinkingBudgets,
   cacheRetention: z.union(['none', 'short', 'long']),
+  preserveThinking: z.boolean(),
   transport: z.union(['sse', 'websocket', 'websocket-cached', 'auto']),
   timeoutMs: z.natural(),
   websocketConnectTimeoutMs: z.natural(),
