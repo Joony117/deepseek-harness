@@ -39,6 +39,7 @@ declare module '@deepseek-ai/dsh-llm' {
 
 const SIGNAL = new AbortController().signal
 const MODEL = 'test-model'
+const SUMMARY_MODEL = 'summary-model'
 
 class ContextAdapter extends LlmAdapter {
   constructor(private readonly contextWindow: number) {
@@ -1437,12 +1438,12 @@ describe('default one-shot summarizer', () => {
     }>().not.toExtend<SummaryResult>()
   })
 
-  it('asks a route that advertises one for the no-thinking level', async () => {
+  it('asks a separate summarization route that advertises one for the no-thinking level', async () => {
     const { adapter, compact } = await summarizerHarness(
       [{ type: 'text', text: 'checkpoint' }],
       undefined,
       MODEL,
-      { auto: false, summarizationProvider: MODEL, summarizationModel: MODEL },
+      { auto: false, summarizationProvider: MODEL, summarizationModel: SUMMARY_MODEL },
     )
     adapter.reasoningEfforts = ['off', 'low', 'high']
 
@@ -1456,7 +1457,7 @@ describe('default one-shot summarizer', () => {
       [{ type: 'text', text: 'checkpoint' }],
       undefined,
       MODEL,
-      { auto: false, summarizationProvider: MODEL, summarizationModel: MODEL },
+      { auto: false, summarizationProvider: MODEL, summarizationModel: SUMMARY_MODEL },
     )
     // A reasoning model offering only thinking levels, then a non-reasoning one.
     adapter.reasoningEfforts = ['low', 'high']
@@ -1473,7 +1474,7 @@ describe('default one-shot summarizer', () => {
       [{ type: 'text', text: 'checkpoint' }],
       undefined,
       MODEL,
-      { auto: false, summarizationProvider: MODEL, summarizationModel: MODEL },
+      { auto: false, summarizationProvider: MODEL, summarizationModel: SUMMARY_MODEL },
     )
     // Only the advisory lookup fails; the stream seam stays healthy, as it
     // would on a context whose LLM double never implemented the lookup.
@@ -1482,6 +1483,24 @@ describe('default one-shot summarizer', () => {
 
     await expect(compact.runSummarize(promptInput('transcript'), agent(conversation(1), 'fallback')))
       .resolves.toMatchObject({ summary: [{ type: 'text', text: 'checkpoint' }] })
+    expect(adapter.lastOptions).not.toHaveProperty('reasoningEffort')
+  })
+
+  it('keeps the conversation effort on its own route so the warm prefix is reused', async () => {
+    const { adapter, compact } = await summarizerHarness([{ type: 'text', text: 'checkpoint' }])
+    adapter.reasoningEfforts = ['off', 'low', 'high']
+    const session = conversation(1)
+    session.append('request/header', {
+      header: { config: { provider: MODEL, model: MODEL, reasoningEffort: ReasoningEffortId('high') } },
+      reason: 'resume',
+    })
+
+    await compact.runSummarize(promptInput('transcript'), agent(session))
+    expect(adapter.lastOptions?.reasoningEffort).toBe('high')
+
+    // A conversation that never chose an effort keeps sending none, even
+    // though the route advertises a no-thinking level.
+    await compact.runSummarize(promptInput('transcript'), agent(conversation(1)))
     expect(adapter.lastOptions).not.toHaveProperty('reasoningEffort')
   })
 

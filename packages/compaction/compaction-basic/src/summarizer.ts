@@ -116,7 +116,8 @@ export type SummaryResult = {
 
 /**
  * Resolve the no-thinking reasoning level for one exact route, when that route
- * advertises one.
+ * advertises one. Used only off the conversation's own route, where there is
+ * no warm prefix for a matching effort to reuse.
  *
  * Call resolution rejects an effort the resolved model does not advertise, and
  * compaction runs against every routable model — non-reasoning models and
@@ -186,7 +187,14 @@ export async function summarizeWithLlm(
       content: [{ type: 'text', text: COMPACTION_INSTRUCTION }],
     }),
   ]
-  const reasoningEffort = await noThinkingEffort(ctx, target, signal)
+  // On the conversation's own route, keep its effort: a chat template may
+  // render the effort into the prompt, so a different one re-prefills the
+  // whole replayed prefix instead of reusing the warm cache.
+  const reasoningEffort = latest !== undefined
+    && latest.provider === target.provider
+    && latest.model === target.model
+    ? latest.reasoningEffort
+    : await noThinkingEffort(ctx, target, signal)
   const options: GenerateOptions = {
     provider: target.provider,
     model: target.model,
