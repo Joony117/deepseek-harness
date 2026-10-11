@@ -1012,6 +1012,41 @@ describe('deriveReplayScript', () => {
     ])
   })
 
+  it('replays a rejected tool-call-only compaction call before the call that wrote the summary', () => {
+    const call = { type: 'tool-call' as const, id: ToolCallId('call_1'), name: 'read', arguments: '{}' }
+    const text = { type: 'text' as const, text: 'checkpoint' }
+    const event: SessionEvent<'compaction/summary'> = {
+      type: 'compaction/summary',
+      seq: SessionSeq(1),
+      time: 0,
+      data: {
+        compactionId: COMPACTION_ID,
+        summary: [text],
+        rawOutput: [text],
+        llmStreamCall: true,
+        rejectedOutput: [call],
+        shadowedRange: { start: SessionSeq(1), end: SessionSeq(1) },
+        shadowedSeqs: [SessionSeq(1)],
+        shadowedTokenCount: 20,
+        provider: 'mock',
+        model: 'mock',
+      },
+    }
+
+    expect(deriveReplayScript([event])).toEqual([
+      { kind: 'chunks', chunks: [
+        { type: 'block-start', index: 0, blockType: 'tool-call' },
+        { type: 'block-end', index: 0, block: call },
+        { type: 'finish', reason: { kind: 'stop' } },
+      ] },
+      { kind: 'chunks', chunks: [
+        { type: 'block-start', index: 0, blockType: 'text' },
+        { type: 'block-end', index: 0, block: text },
+        { type: 'finish', reason: { kind: 'stop' } },
+      ] },
+    ])
+  })
+
   it('does not infer an LLM call from compaction/summary without raw output', () => {
     const event: SessionEvent<'compaction/summary'> = {
       type: 'compaction/summary',

@@ -5922,7 +5922,7 @@
       "kind": "event",
       "event": "compaction/summary",
       "surface": false,
-      "digest": "e2f9a41e0989f54ed8cee80f8db2bcf9d60a5c810dc9d45b83fa050b9dce7602",
+      "digest": "7aefda7246ea473759f90a32b9b198c964ada08b88d259ca9cdd76494e5ad1bb",
       "schema": {
         "root": 0,
         "nodes": [
@@ -5996,6 +5996,11 @@
                 "name": "rawOutput",
                 "type": 6,
                 "optional": false
+              },
+              {
+                "name": "rejectedOutput",
+                "type": 6,
+                "optional": true
               },
               {
                 "name": "shadowedRange",
@@ -23219,7 +23224,7 @@
       "digest": "5dd766ccd1702a1142ad8b4bd44f2242f8e8a6752669ad3de0a5d224329b1438",
       "names": [],
       "sources": [
-        "packages/compaction/compaction/src/types.ts:82"
+        "packages/compaction/compaction/src/types.ts:88"
       ]
     },
     {
@@ -23575,6 +23580,11 @@
     },
     {
       "digest": "7a651f3b672c52fb615f22c0ce9cb3cc5b22aad92e6bbeefb0808fd7b9233a50",
+      "names": [],
+      "sources": []
+    },
+    {
+      "digest": "7aefda7246ea473759f90a32b9b198c964ada08b88d259ca9cdd76494e5ad1bb",
       "names": [],
       "sources": []
     },
@@ -24019,11 +24029,6 @@
       "sources": []
     },
     {
-      "digest": "9947aa5938fe19a895298da412917acbf9ffb5093a73ab8baa257e6ae9e63a07",
-      "names": [],
-      "sources": []
-    },
-    {
       "digest": "998f22585a5d73ec005365e203f07fc3b3a029e82323fdda3fd7f13b0a9639d0",
       "names": [],
       "sources": []
@@ -24098,7 +24103,7 @@
       "names": [],
       "sources": [
         "packages/compaction/compaction/src/types.ts:38",
-        "packages/compaction/compaction/src/types.ts:84"
+        "packages/compaction/compaction/src/types.ts:90"
       ]
     },
     {
@@ -24265,11 +24270,6 @@
       "sources": [
         "packages/schedule/schedule/src/types.ts:173"
       ]
-    },
-    {
-      "digest": "a99ec0993c62c058e50af9f68922202a3b54f5e259bc2abf1915a73381d2316d",
-      "names": [],
-      "sources": []
     },
     {
       "digest": "a99f76fd149051c363f960bfeeb5b9509587ecaf7591a42797e4bfe810d8987a",
@@ -24769,7 +24769,7 @@
       "digest": "ca59530d1a4f3e191b4032bc4a20eded0d827db8b5a7efb27b3af9e9b456c6f2",
       "names": [],
       "sources": [
-        "packages/compaction/compaction/src/types.ts:72"
+        "packages/compaction/compaction/src/types.ts:78"
       ]
     },
     {
@@ -24812,6 +24812,11 @@
       "sources": [
         "packages/llm/llm-retry/src/types.ts:17"
       ]
+    },
+    {
+      "digest": "cf17e9935b6154446d77c7ff38c2c6c6bb239f60f3d4e4cbe5e6fc3f8d627706",
+      "names": [],
+      "sources": []
     },
     {
       "digest": "cf6e3aaf1e2de6480aa0157730a41b9a492108a55304100b0f7e112711dd4331",
@@ -24860,6 +24865,11 @@
     },
     {
       "digest": "d595ec73b32b016a6055333c67a5d646032b22e672da1d4a09c5b1ae398a093a",
+      "names": [],
+      "sources": []
+    },
+    {
+      "digest": "d59ea123cc0c5ff85f795d488dfb00b24af5dcb1c8f150dd51ac3f585687fac4",
       "names": [],
       "sources": []
     },
@@ -24990,11 +25000,6 @@
     },
     {
       "digest": "e2d0367e5716bc188435e51718ebff8ce873190625fa93b1c5331102d98758fa",
-      "names": [],
-      "sources": []
-    },
-    {
-      "digest": "e2f9a41e0989f54ed8cee80f8db2bcf9d60a5c810dc9d45b83fa050b9dce7602",
       "names": [],
       "sources": []
     },
