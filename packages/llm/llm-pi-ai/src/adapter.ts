@@ -344,6 +344,7 @@ export class PiAiAdapter extends LlmAdapter {
       ...configuredMaxTokens === undefined ? {} : { defaultMaxTokens: configuredMaxTokens },
       ...reasoningInfo(resolvedModel, defaultLevel),
       ...conversationUpdates(resolvedModel),
+      ...profile.promptCache === undefined ? {} : { promptCache: profile.promptCache },
     }
   }
 

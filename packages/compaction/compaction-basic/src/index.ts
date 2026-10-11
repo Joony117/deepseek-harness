@@ -12,7 +12,7 @@ import type { CompactionResult, CompactionTrigger } from '@deepseek-ai/dsh-compa
 import { SessionSeq } from '@deepseek-ai/dsh-session'
 import type { Session } from '@deepseek-ai/dsh-session'
 import { CONTEXT_WINDOW_EXCEEDED_CODE, createUserMessage } from '@deepseek-ai/dsh-llm'
-import type { LlmCallConfig } from '@deepseek-ai/dsh-llm'
+import type { LlmCallConfig, LlmResolvedModelInfo } from '@deepseek-ai/dsh-llm'
 import { assertNever } from '@deepseek-ai/dsh-util-values'
 import type { Agent, PreStepDecision } from '@deepseek-ai/dsh-agent'
 import type { CommandId } from '@deepseek-ai/dsh-commands/brand'
@@ -335,7 +335,7 @@ export class BasicCompactionEngine extends CompactionEngine {
     const config = target === undefined
       ? this.config
       : resolveTargetPolicy(this.config, target)
-    const room = config.appendOnly && target !== undefined && input.surface !== undefined
+    const room = target !== undefined && input.surface !== undefined
       ? await this.appendOnlyRoom(config, agent, target, signal)
       : undefined
     if (room === undefined || input.surface === undefined) {
@@ -354,19 +354,21 @@ export class BasicCompactionEngine extends CompactionEngine {
    * to keep the shadowed-region form (another summary model, or too little room).
    */
   private async appendOnlyRoom(
-    config: { summarizationProvider: string; maxTokens: number },
+    config: { summarizationProvider: string; maxTokens: number; appendOnly: boolean },
     agent: Agent,
     target: Pick<LlmCallConfig, 'provider' | 'model'>,
     signal?: AbortSignal,
   ): Promise<number | undefined> {
     if (config.summarizationProvider.length > 0) return undefined
-    let contextWindow: number | undefined
+    let info: LlmResolvedModelInfo
     try {
-      contextWindow = (await this.ctx.llm.resolveModelInfo(target.provider, target.model, signal)).context?.contextWindow
+      info = await this.ctx.llm.resolveModelInfo(target.provider, target.model, signal)
     } catch {
       // Advisory, like the summarizer's own capability lookup: fall back to the region form.
       return undefined
     }
+    if (!config.appendOnly && info.promptCache !== 'append-only') return undefined
+    const contextWindow = info.context?.contextWindow
     if (contextWindow === undefined) return undefined
     const meter = this.ctx.tokenMeter
     const prompt = meter.measure(agent.session).totalTokens
@@ -435,7 +437,7 @@ export class BasicCompactionEngine extends CompactionEngine {
       )
     }
     const spec = resolveCompactSpec(
-      policy,
+      info.promptCache === 'append-only' ? { ...policy, appendOnly: true } : policy,
       info.context.contextWindow,
       reservedCompletionTokens(agent, info.defaultMaxTokens),
     )
