@@ -299,6 +299,9 @@ export class ReactLoopAgent implements Agent {
     try {
       const assembly = await this.loopCtx.systemPrompt.assemble({ ...assembleContextFor(this, signal), modelSelection: selection, toolSet })
       signal.throwIfAborted()
+      // A fresh session's first snapshot precedes its prompt, so sessions sharing
+      // a workspace share a cacheable prefix; later snapshots follow history.
+      const fresh = this.session.surface.nodes.length === 0
       const decision = await this.dispatch.waterfall(
         'agent/pre-step', { messages: claimed, ...position, signal, modelSelection: selection },
         (): Promise<PreStepDecision> => {
@@ -306,7 +309,7 @@ export class ReactLoopAgent implements Agent {
           const context = this.runtimeContext.project(sections)
           return Promise.resolve<PreStepDecision>({
             kind: 'enter',
-            messages: context === undefined ? claimed : [...claimed, context],
+            messages: context === undefined ? claimed : fresh ? [context, ...claimed] : [...claimed, context],
           })
         },
       )
