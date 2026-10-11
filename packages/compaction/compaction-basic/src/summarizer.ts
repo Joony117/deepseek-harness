@@ -5,9 +5,10 @@
  */
 
 import type { Context } from '@deepseek-ai/cordis'
-import { contentHasImage, createUserMessage, BlockAssembler, LlmError } from '@deepseek-ai/dsh-llm'
+import { contentHasImage, BlockAssembler, LlmError } from '@deepseek-ai/dsh-llm'
+import { deepFreeze } from '@deepseek-ai/dsh-util-values'
 import type {
-  ContentBlock, FinishReason, GenerateOptions, Message, TokenUsage, ToolSchema,
+  ContentBlock, FinishReason, GenerateOptions, Message, RequestMessage, TokenUsage, ToolSchema,
 } from '@deepseek-ai/dsh-llm'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 
@@ -20,6 +21,14 @@ interface SummaryConfig {
 /** Tags wrapping the structured summary inside the landed checkpoint node. */
 const SUMMARY_OPEN_TAG = '<compacted-summary>'
 const SUMMARY_CLOSE_TAG = '</compacted-summary>'
+
+/**
+ * The adapter-owned reasoning level meaning "produce no thinking". A thinking
+ * model spends the summarization output cap on reasoning before it writes a
+ * single checkpoint line, so the call finishes `max-tokens` with nothing
+ * usable; selecting this level spends the whole cap on the checkpoint instead.
+ */
+const NO_THINKING_EFFORT = 'off'
 
 /**
  * The summarization directive, delivered as the FINAL user message after the
@@ -76,11 +85,9 @@ const CHECKPOINT_PREAMBLE =
  * compaction instruction is then the only novel input.
  */
 export interface SummarizationInput {
-  /** The conversation's own system prompt, reused for prefix-cache alignment; absent for a system-less request. */
-  readonly system?: string
   /** The conversation's tool schemas, reused for prefix-cache alignment; absent when the request carried none. */
   readonly tools?: readonly ToolSchema[]
-  /** The shadowed region, in surface order, that precedes the compaction instruction. */
+  /** The derived system head, when present, followed by the shadowed region in surface order. */
   readonly messages: readonly Message[]
 }
 
@@ -106,6 +113,35 @@ export type SummaryResult = {
     llmStreamCall?: never
   }
 )
+
+/**
+ * Resolve the no-thinking reasoning level for one exact route, when that route
+ * advertises one.
+ *
+ * Call resolution rejects an effort the resolved model does not advertise, and
+ * compaction runs against every routable model — non-reasoning models and
+ * reasoning models with no `off` level included — so an unconditional request
+ * would trade a truncated checkpoint for a guaranteed failure. Capability
+ * lookup is advisory for the same reason: a context whose LLM seam is absent,
+ * doubled, or offline must summarize exactly as it did before rather than gain
+ * a new way to fail.
+ * @param ctx - context providing the LLM service.
+ * @param target - the exact provider/model this summarization will route to.
+ * @param signal - optional cancellation forwarded to capability lookup.
+ * @returns the advertised no-thinking effort, or `undefined` to leave the request untouched.
+ */
+async function noThinkingEffort(
+  ctx: Context,
+  target: { provider: string; model: string },
+  signal?: AbortSignal,
+): Promise<GenerateOptions['reasoningEffort']> {
+  try {
+    const info = await ctx.llm.resolveModelInfo(target.provider, target.model, signal)
+    return info.reasoning?.efforts.find(effort => effort.id === NO_THINKING_EFFORT)?.id
+  } catch {
+    return undefined
+  }
+}
 
 /**
  * Run the default cache-reusing `ctx.llm.stream()` summarization call: replay
@@ -143,19 +179,21 @@ export async function summarizeWithLlm(
   }
 
   const assembler = new BlockAssembler()
-  const messages: Message[] = [
+  const messages: RequestMessage[] = [
     ...input.messages,
-    createUserMessage({
+    deepFreeze({
+      role: 'user',
       content: [{ type: 'text', text: COMPACTION_INSTRUCTION }],
-      source: { kind: 'plugin', plugin: 'dsh-compaction-basic' },
     }),
   ]
+  const reasoningEffort = await noThinkingEffort(ctx, target, signal)
   const options: GenerateOptions = {
     provider: target.provider,
     model: target.model,
     messages,
-    ...input.system === undefined ? {} : { system: input.system },
+    toolHistory: agent.session.toolHistory(),
     ...input.tools === undefined ? {} : { tools: [...input.tools] },
+    ...reasoningEffort === undefined ? {} : { reasoningEffort },
     maxTokens: config.maxTokens,
     sessionId: agent.session.id,
     purpose: 'compaction',
@@ -199,9 +237,7 @@ function finishError(finish: FinishReason): Error | undefined {
   switch (finish.kind) {
     case 'error':
     case 'aborted': {
-      const error = new Error(finish.failure.message) as Error & { code?: string }
-      error.code = finish.failure.code
-      return error
+      return new LlmError(finish.failure.message, finish.failure.code, finish.failure)
     }
     case 'max-tokens': {
       const error = new Error('summarization truncated at the token cap (incomplete checkpoint)') as Error & { code?: string }
