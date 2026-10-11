@@ -1028,6 +1028,26 @@ describe('optional model-free tool-result pruning', () => {
     expect(compact.calls).toHaveLength(1)
   })
 
+  it('treats a route that declares an append-only prompt cache as append-only', async () => {
+    const ctx = createContext(1_000)
+    const resolve = ctx.llm.resolveModelInfo.bind(ctx.llm)
+    vi.spyOn(ctx.llm, 'resolveModelInfo').mockImplementation(async (provider, model, signal) => ({
+      ...await resolve(provider, model, signal), promptCache: 'append-only',
+    }))
+    void new ToolResultPruner(ctx, pruneConfig)
+    const compact = new TestCompactionEngine(ctx, {
+      headroomTokens: 0,
+      maxTokens: 8192,
+      auto: false,
+      thresholdRatio: 0.5,
+      retainTokens: 50,
+    })
+    const session = oversizedToolResult(3_000, true)
+
+    expect(await compactIfNeeded(compact, session)).not.toBeNull()
+    expect(compact.calls).toHaveLength(1)
+  })
+
   it('on an append-only route, summarizes the untrimmed surface and trims only what the summary keeps', async () => {
     const ctx = createContext(2_000)
     void new ToolResultPruner(ctx, pruneConfig)
@@ -1504,12 +1524,12 @@ describe('default one-shot summarizer', () => {
   })
 
   describe('on an append-only route', () => {
-    async function appendOnlyRun(maxTokens: number, room: (promptTokens: number) => number) {
+    async function appendOnlyRun(maxTokens: number, room: (promptTokens: number) => number, declared = false) {
       const harness = await summarizerHarness(
         [{ type: 'text', text: 'summary' }],
         undefined,
         MODEL,
-        { auto: false, appendOnly: true, maxTokens },
+        { auto: false, appendOnly: !declared, maxTokens },
       )
       const session = conversation(3)
       session.append('request/header', {
@@ -1523,6 +1543,7 @@ describe('default one-shot summarizer', () => {
       const contextWindow = room(harness.ctx.tokenMeter.measure(session).totalTokens)
       vi.spyOn(harness.ctx.llm, 'resolveModelInfo').mockImplementation((provider, model) => Promise.resolve({
         provider, id: model, name: model, context: { contextWindow },
+        ...declared ? { promptCache: 'append-only' as const } : {},
       }))
       const nodes = session.surface.nodes
       await harness.compact.compactRegion(nodes[0]!, nodes[1]!, agent(session, MODEL), SIGNAL)
@@ -1537,6 +1558,12 @@ describe('default one-shot summarizer', () => {
       expect(options.messages.slice(0, -1)).toEqual(surface)
       expect(options.messages.at(-1)).toMatchObject({ role: 'user' })
       expect(options.maxTokens).toBe(500)
+    })
+
+    it('follows the route when it declares an append-only prompt cache', async () => {
+      const { options, surface } = await appendOnlyRun(500, prompt => prompt + 100_000, true)
+
+      expect(options.messages.slice(0, -1)).toEqual(surface)
     })
 
     it('shrinks the summary cap to the room the whole prompt leaves', async () => {

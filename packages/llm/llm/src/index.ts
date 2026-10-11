@@ -801,6 +801,13 @@ export class LlmRuntime extends TypertRemoteService {
         'INVALID_MODEL_INFO',
       )
     }
+    const promptCache: string | undefined = resolved.promptCache
+    if (promptCache !== undefined && promptCache !== 'append-only') {
+      throw new LlmError(
+        `adapter returned invalid prompt cache reuse for provider "${provider}" model "${model}"`,
+        'INVALID_MODEL_INFO',
+      )
+    }
     const defaultMaxTokens = resolved.defaultMaxTokens
     if (defaultMaxTokens !== undefined
       && (!Number.isSafeInteger(defaultMaxTokens) || defaultMaxTokens <= 0)) {
@@ -819,6 +826,7 @@ export class LlmRuntime extends TypertRemoteService {
       ...defaultMaxTokens === undefined ? {} : { defaultMaxTokens },
       ...resolved.systemPromptUpdate === undefined ? {} : { systemPromptUpdate: resolved.systemPromptUpdate },
       ...resolved.toolUpdate === undefined ? {} : { toolUpdate: resolved.toolUpdate },
+      ...resolved.promptCache === undefined ? {} : { promptCache: resolved.promptCache },
     }
     const reasoning = resolved.reasoning
     if (reasoning === undefined) return info

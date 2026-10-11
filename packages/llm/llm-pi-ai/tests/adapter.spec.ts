@@ -163,6 +163,13 @@ describe('PiAiAdapter provider routing', () => {
     expect(server.requests[1]).not.toHaveProperty('preserve_thinking')
   })
 
+  it('declares the profile prompt-cache reuse on model info', async () => {
+    const on = await harness('http://127.0.0.1:1/v1', { promptCache: 'append-only' })
+    await expect(on.llm.resolveModelInfo('deepseek', 'deepseek-flash')).resolves.toMatchObject({ promptCache: 'append-only' })
+    const off = await harness('http://127.0.0.1:1/v1')
+    expect(await off.llm.resolveModelInfo('deepseek', 'deepseek-flash')).not.toHaveProperty('promptCache')
+  })
+
   it('uses a dynamic request effort and reports unsupported efforts before network I/O', async () => {
     const server = await mockServer([{ events: textEvents }, { events: textEvents }])
     const ctx = await harness(server.url, { reasoning: 'max' })
