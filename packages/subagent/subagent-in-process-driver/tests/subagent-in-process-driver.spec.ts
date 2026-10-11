@@ -407,6 +407,41 @@ describe('startInProcessRun', () => {
     await run.dispose()
   })
 
+  it('cancels a child that starts no model step within its stall limit', async () => {
+    const { parent } = await setup(['hang'])
+    const run = await startInProcessRun(request(parent), { limits: { stallMs: 30 } })
+    await expect(run.result).resolves.toEqual({
+      output: [{ type: 'text', text: 'partial' }],
+      stopReason: 'error',
+      diagnostic: 'child stopped after 30ms without starting a model step',
+    })
+    await run.dispose()
+  })
+
+  it('restarts the stall limit at every step, so progressing work runs past it', async () => {
+    const { ctx, parent, adapter } = await setup([
+      toolCallResponse('c1', 'slow', {}),
+      toolCallResponse('c2', 'slow', {}),
+      toolCallResponse('c3', 'slow', {}),
+      textResponse('done'),
+    ])
+    const disposeSlow = ctx.tools.register(defineContentToolFixture({
+      name: 'slow', description: 'probe', parameters: {},
+      async execute() {
+        await new Promise(resolve => setTimeout(resolve, 60))
+        return [{ type: 'text', text: 'slow result' }]
+      },
+    }))
+    // Each step waits 60ms on its tool; the run takes ~180ms in total, past 100ms.
+    const run = await startInProcessRun(request(parent), { limits: { stallMs: 100 } })
+    const result = await run.result
+    expect(adapter.requests).toHaveLength(4)
+    expect(result).toMatchObject({ stopReason: 'completed' })
+    expect(text(result.output)).toBe('done')
+    await run.dispose()
+    disposeSlow()
+  })
+
   it('keeps a parent cancellation aborted while a deadline is pending', async () => {
     const { parent } = await setup(['hang'])
     const controller = new AbortController()

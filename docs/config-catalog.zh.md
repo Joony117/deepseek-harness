@@ -3315,6 +3315,8 @@ export interface Config {
   maxSteps?: number
   /** Wall-clock milliseconds one child may run before it is cancelled; omit for no deadline. */
   deadlineMs?: number
+  /** Milliseconds one child may go without starting a model step before it is cancelled; omit for no stall limit. */
+  stallMs?: number
 }
 ```
 <!-- END GENERATED config-catalog:@deepseek-ai/dsh-subagent-fork-in-process -->
@@ -3336,6 +3338,8 @@ export interface Config {
   maxSteps?: number
   /** Wall-clock milliseconds one child may run before it is cancelled; omit for no deadline. */
   deadlineMs?: number
+  /** Milliseconds one child may go without starting a model step before it is cancelled; omit for no stall limit. */
+  stallMs?: number
 }
 ```
 <!-- END GENERATED config-catalog:@deepseek-ai/dsh-subagent-spawn-in-process -->

@@ -35,12 +35,15 @@ export interface Config {
   maxSteps?: number
   /** Wall-clock milliseconds one child may run before it is cancelled; omit for no deadline. */
   deadlineMs?: number
+  /** Milliseconds one child may go without starting a model step before it is cancelled; omit for no stall limit. */
+  stallMs?: number
 }
 
 export const Config: z<Config> = z.object({
   providerName: z.string().default('fork'),
   maxSteps: z.number().step(1).min(1).max(Number.MAX_SAFE_INTEGER),
   deadlineMs: z.number().step(1).min(1).max(2 ** 31 - 1),
+  stallMs: z.number().step(1).min(1).max(2 ** 31 - 1),
 })
 
 /**
@@ -102,5 +105,6 @@ export function apply(ctx: Context, config: Config): void {
   ctx.subagents.registerProvider(new ForkInProcessProvider(config.providerName, {
     maxSteps: config.maxSteps,
     deadlineMs: config.deadlineMs,
+    stallMs: config.stallMs,
   }))
 }

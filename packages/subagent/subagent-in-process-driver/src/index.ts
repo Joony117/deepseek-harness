@@ -72,6 +72,11 @@ export interface InProcessRunLimits {
   readonly maxSteps?: number | undefined
   /** Wall-clock milliseconds from publication before the child is cancelled. */
   readonly deadlineMs?: number | undefined
+  /**
+   * Milliseconds the child may go without entering a model step before it is
+   * cancelled. Restarts at every step, so slow but progressing work continues.
+   */
+  readonly stallMs?: number | undefined
 }
 
 /** Extra inputs the spawn and fork providers supply to the shared driver. */
@@ -156,7 +161,7 @@ export async function startInProcessRun(
 
   let structured: StructuredAttachment | undefined
   const limits = options.limits ?? {}
-  const flags: RunFlags = { cancelled: false, limit: undefined }
+  const flags: RunFlags = { cancelled: false, limit: undefined, stall: undefined }
   const setup = (childCtx: Context, child: Agent): void => {
     appendDelegatedPolicyOverrides(child.session, inherited)
     applyChildComposition(childCtx, parent, {
@@ -171,6 +176,21 @@ export async function startInProcessRun(
     if (maxSteps !== undefined) {
       attachStepLimit(childCtx, maxSteps, () => {
         flags.limit ??= `child stopped after its limit of ${maxSteps} model steps`
+      })
+    }
+    const stallMs = limits.stallMs
+    if (stallMs !== undefined) {
+      const arm = (): void => {
+        clearTimeout(flags.stall)
+        flags.stall = setTimeout(() => {
+          flags.limit ??= `child stopped after ${stallMs}ms without starting a model step`
+          child.cancel({ kind: 'parent' })
+        }, stallMs)
+      }
+      arm()
+      childCtx.on('agent/pre-step', async (_event, next) => {
+        arm()
+        return next()
       })
     }
   }
@@ -202,6 +222,8 @@ interface RunFlags {
   cancelled: boolean
   /** Why a configured budget stopped the child, once one has. */
   limit: string | undefined
+  /** Pending no-progress timer, re-armed at every step boundary. */
+  stall: ReturnType<typeof setTimeout> | undefined
 }
 
 /**
@@ -254,6 +276,7 @@ function drivePublishedRun(
         : { output: settled.output, stopReason: 'error', diagnostic: flags.limit }
     } finally {
       clearTimeout(deadline)
+      clearTimeout(flags.stall)
       signal.removeEventListener('abort', onAbort)
     }
   })()
@@ -264,6 +287,7 @@ function drivePublishedRun(
     result,
     async dispose(): Promise<void> {
       clearTimeout(deadline)
+      clearTimeout(flags.stall)
       signal.removeEventListener('abort', onAbort)
       flags.cancelled = true
       const settlements = await Promise.allSettled([handle.dispose(), result])
