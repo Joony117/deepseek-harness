@@ -224,7 +224,7 @@ describe('same-session goal driving', () => {
     const owner = test.agent.session.id
     const jobs: Pick<JobView, 'owner' | 'status'>[] = [
       { owner, status: 'running' },
-      { owner: undefined, status: 'running' },
+      { status: 'running' },
     ]
     const listeners: JobEventListener[] = []
     test.ctx.provide('jobs', {
