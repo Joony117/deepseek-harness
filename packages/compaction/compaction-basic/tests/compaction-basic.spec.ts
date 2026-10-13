@@ -161,7 +161,7 @@ function conversation(turns = 4, text = 'fixture '.repeat(40).trim(), system?: s
   return session
 }
 
-function toolConversation(): Session {
+function toolConversation(consumed = false): Session {
   const session = Session.create(SessionId('tools'))
   for (let turn = 1; turn <= 3; turn += 1) {
     const callId = ToolCallId(`call-${turn}`)
@@ -204,6 +204,17 @@ function toolConversation(): Session {
       }),
     }, { surfaceOp: 'append' })
     session.append('step/end', { turn, step: 1 })
+    if (consumed) {
+      session.append('step/start', { turn, step: 2 })
+      session.append('assistant/message', {
+        stream: [], turn, step: 2,
+        message: createMessage({
+          role: 'assistant', content: [{ type: 'text', text: 'Result processed.' }],
+          source: { kind: 'model', provider: MODEL, model: MODEL },
+        }),
+      }, { surfaceOp: 'append' })
+      session.append('step/end', { turn, step: 2 })
+    }
     session.append('turn/end', { turn, reason: { kind: 'completed' } })
   }
   session.append('turn/start', { turn: 4 })
@@ -211,7 +222,7 @@ function toolConversation(): Session {
 }
 
 /** One closed routed tool step followed by an open turn for rewrite events. */
-function oversizedToolResult(chars = 3_000, withCompactablePrompt = false): Session {
+function oversizedToolResult(chars = 3_000, withCompactablePrompt = false, consumed = true): Session {
   const session = Session.create(SessionId(`oversized-tool-${chars}`))
   const callId = ToolCallId('oversized')
   session.append('turn/start', { turn: 1 })
@@ -251,6 +262,17 @@ function oversizedToolResult(chars = 3_000, withCompactablePrompt = false): Sess
     meta: { presentation: 'preserved' },
   }, { surfaceOp: 'append' })
   session.append('step/end', { turn: 1, step: 1 })
+  if (consumed) {
+    session.append('step/start', { turn: 1, step: 2 })
+    session.append('assistant/message', {
+      stream: [], turn: 1, step: 2,
+      message: createMessage({
+        role: 'assistant', content: [{ type: 'text', text: 'Result processed.' }],
+        source: { kind: 'model', provider: MODEL, model: MODEL },
+      }),
+    }, { surfaceOp: 'append' })
+    session.append('step/end', { turn: 1, step: 2 })
+  }
   session.append('turn/end', { turn: 1, reason: { kind: 'completed' } })
   session.append('turn/start', { turn: 2 })
   return session
@@ -1003,7 +1025,7 @@ describe('optional model-free tool-result pruning', () => {
       thresholdRatio: 0.5,
       retainTokens: 50,
     })
-    const session = toolConversation()
+    const session = toolConversation(true)
 
     expect(await compactIfNeeded(compact, session)).not.toBeNull()
     expect(compact.calls).toHaveLength(1)
@@ -1060,7 +1082,7 @@ describe('optional model-free tool-result pruning', () => {
       retainTokens: 50,
       appendOnly: true,
     })
-    const session = toolConversation()
+    const session = toolConversation(true)
 
     expect(await compactIfNeeded(compact, session)).not.toBeNull()
     expect(compact.calls).toHaveLength(1)
@@ -2234,7 +2256,7 @@ describe('automatic listener and loader composition', () => {
     expect(session.surface.nodes).toContain(retainedSeq)
   })
 
-  it('authorizes overflow retry when pruning alone advances an indivisible surface', async () => {
+  it('refuses overflow retry when the only oversized result is still unconsumed', async () => {
     const ctx = createContext(10_000)
     void new ToolResultPruner(ctx, {
       thresholdChars: 100,
@@ -2247,10 +2269,12 @@ describe('automatic listener and loader composition', () => {
       thresholdRatio: 1,
       retainTokens: 900,
     })
-    const session = oversizedToolResult()
+    const session = oversizedToolResult(3_000, false, false)
 
-    expect(await recover(ctx, agent(session, MODEL), overflow())).toBe(true)
-    expect(session.surface.replaceGeneration).toBe(1)
+    expect(await recover(ctx, agent(session, MODEL), overflow())).toBe(false)
+    expect(session.surface.replaceGeneration).toBe(0)
+    expect(session.deriveMessages().find(message => message.role === 'tool')?.content)
+      .toEqual([{ type: 'text', text: 'X'.repeat(3_000) }])
     expect(session.snapshotEvents().some(event => event.type === 'compaction/summary')).toBe(false)
     expect(compact.calls).toHaveLength(0)
   })

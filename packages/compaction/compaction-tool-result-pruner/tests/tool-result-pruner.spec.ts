@@ -75,6 +75,15 @@ function appendToolStep(
     ...extra,
   }, { surfaceOp: 'append' })
   session.append('step/end', { turn, step: 1 })
+  session.append('step/start', { turn, step: 2 })
+  session.append('assistant/message', {
+    stream: [], turn, step: 2,
+    message: createMessage({
+      role: 'assistant', content: [{ type: 'text', text: 'Result processed.' }],
+      source: { kind: 'model', provider: MODEL, model: MODEL },
+    }),
+  }, { surfaceOp: 'append' })
+  session.append('step/end', { turn, step: 2 })
   session.append('turn/end', { turn, reason: { kind: 'completed' } })
   return result.seq
 }
@@ -184,6 +193,48 @@ describe('ToolResultPruner content transform', () => {
 })
 
 describe('ToolResultPruner session transaction', () => {
+  it('preserves pending parallel results across replay until an assistant reply', () => {
+    const session = Session.create(SessionId('pending-results'))
+    appendToolStep(session, 1, 'old', [{ type: 'text', text: 'old'.repeat(100) }])
+    const calls = ['pending-a', 'pending-b'].map(ToolCallId)
+    session.append('turn/start', { turn: 2 })
+    session.append('step/start', { turn: 2, step: 1 })
+    session.append('assistant/message', {
+      stream: [], turn: 2, step: 1,
+      message: createMessage({
+        role: 'assistant',
+        content: calls.map(id => ({ type: 'tool-call', id, name: 'read', arguments: '{}' })),
+        source: { kind: 'model', provider: MODEL, model: MODEL },
+      }),
+    }, { surfaceOp: 'append' })
+    for (const callId of calls) {
+      session.append('tool/call', { turn: 2, step: 1, callId, name: 'read', arguments: '{}' })
+      session.append('tool/result', {
+        turn: 2, step: 1,
+        message: createToolResultMessage({
+          callId, content: [{ type: 'text', text: `${callId}: ${'evidence'.repeat(100)}` }], isError: false,
+        }),
+      }, { surfaceOp: 'append' })
+    }
+    session.append('step/end', { turn: 2, step: 1 })
+    const pending = session.deriveMessages().filter(message => message.role === 'tool').slice(-2)
+    expect(service().pruneSession(session).pruned.map(entry => entry.callId)).toEqual([ToolCallId('old')])
+    expect(session.deriveMessages().filter(message => message.role === 'tool').slice(-2)).toEqual(pending)
+
+    const resumed = Session.create(session.id, session.snapshotEvents())
+    expect(service().pruneSession(resumed)).toEqual({ pruned: [], charsRemoved: 0 })
+    resumed.append('step/start', { turn: 2, step: 2 })
+    resumed.append('assistant/message', {
+      stream: [], turn: 2, step: 2,
+      message: createMessage({
+        role: 'assistant', content: [{ type: 'text', text: 'Both results processed.' }],
+        source: { kind: 'model', provider: MODEL, model: MODEL },
+      }),
+    }, { surfaceOp: 'append' })
+    resumed.append('step/end', { turn: 2, step: 2 })
+    expect(service().pruneSession(resumed).pruned.map(entry => entry.callId)).toEqual(calls)
+  })
+
   it('prunes a stable snapshot, preserves all data, and cites the replaced result', () => {
     const session = Session.create(SessionId('preserve'))
     const originalSeq = appendToolStep(session, 1, 'one', [{

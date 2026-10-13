@@ -233,7 +233,9 @@ measureContent(blocks: readonly ContentBlock[]): number
 pruneContent(blocks: readonly ContentBlock[]): ContentBlock[] | null
 
 /**
- * Prune every over-budget tool result from one stable current-surface snapshot.
+ * Prune over-budget tool results preceding a later assistant message in one
+ * stable current-surface snapshot. Pending results remain intact until the
+ * model has responded to them, including after replay or resume.
  * Each replacement preserves the complete event data except for `content`,
  * cites the shadowed node so replay can recover the replacement input, and is
  * immediately preceded by a `compaction/prune` shadow-price event pricing the

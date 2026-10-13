@@ -3271,7 +3271,7 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
       },
       {
         signature: 'pruneSession(session: Session): PruneResult',
-        description: 'Prune every over-budget tool result from one stable current-surface snapshot. Each replacement preserves the complete event data except for `content`, cites the shadowed node so replay can recover the replacement input, and is immediately preceded by a `compaction/prune` shadow-price event pricing the shadowed node through the injected token meter, so pure consumers can subtract it without per-node state.',
+        description: 'Prune over-budget tool results preceding a later assistant message in one stable current-surface snapshot. Pending results remain intact until the model has responded to them, including after replay or resume. Each replacement preserves the complete event data except for `content`, cites the shadowed node so replay can recover the replacement input, and is immediately preceded by a `compaction/prune` shadow-price event pricing the shadowed node through the injected token meter, so pure consumers can subtract it without per-node state.',
         parameters: [{ name: 'session', description: 'session whose current surface is rewritten.' }],
         returns: 'landed replacements and aggregate Unicode-code-point savings.',
         throws: ['when the session rejects a replacement; replacements committed earlier in the pass remain durable.'],
@@ -5652,7 +5652,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'LlmResolvedModelInfo',
-    declaration: 'export interface LlmResolvedModelInfo extends LlmModelInfo {\n    context?: LlmModelContext;\n    defaultMaxTokens?: number;\n    reasoning?: LlmModelReasoningInfo;\n    systemPromptUpdate?: SystemPromptUpdate;\n    toolUpdate?: ToolUpdate;\n}',
+    declaration: 'export interface LlmResolvedModelInfo extends LlmModelInfo {\n    context?: LlmModelContext;\n    defaultMaxTokens?: number;\n    reasoning?: LlmModelReasoningInfo;\n    systemPromptUpdate?: SystemPromptUpdate;\n    toolUpdate?: ToolUpdate;\n    promptCache?: PromptCacheReuse;\n}',
   },
   {
     name: 'LlmRuntime',
@@ -6081,6 +6081,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'PromptAssembly',
     declaration: 'export interface PromptAssembly {\n    sections: AssembledSection[];\n    contexts: AssembledContext[];\n    tools: ToolSchema[];\n    variables: Record<string, string | undefined>;\n}',
+  },
+  {
+    name: 'PromptCacheReuse',
+    declaration: 'export type PromptCacheReuse = \'append-only\';',
   },
   {
     name: 'PromptContext',
