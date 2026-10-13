@@ -122,7 +122,9 @@ export class ToolResultPruner extends Service {
   }
 
   /**
-   * Prune every over-budget tool result from one stable current-surface snapshot.
+   * Prune over-budget tool results preceding a later assistant message in one
+   * stable current-surface snapshot. Pending results remain intact until the
+   * model has responded to them, including after replay or resume.
    * Each replacement preserves the complete event data except for `content`,
    * cites the shadowed node so replay can recover the replacement input, and is
    * immediately preceded by a `compaction/prune` shadow-price event pricing the
@@ -135,16 +137,18 @@ export class ToolResultPruner extends Service {
    */
   pruneSession(session: Session): PruneResult {
     const candidates: SnapshotCandidate[] = []
+    let consumedCount = 0
     for (const seq of [...session.surface.nodes]) {
       // oxlint-disable-next-line typescript/no-deprecated -- Existing Session history read; migration deferred.
       const event = session.eventAt(seq)
+      if (event?.type === 'assistant/message') consumedCount = candidates.length
       /* v8 ignore next -- surface seqs are validated contiguous log references. */
       if (event?.type === 'tool/result') candidates.push({ seq, event })
     }
 
     const pruned: PrunedEntry[] = []
     let charsRemoved = 0
-    for (const { seq, event } of candidates) {
+    for (const { seq, event } of candidates.slice(0, consumedCount)) {
       const original = session.deriveEventMessage(event) as ToolResultMessage
       const content = this.pruneContent(original.content)
       if (content === null) continue
