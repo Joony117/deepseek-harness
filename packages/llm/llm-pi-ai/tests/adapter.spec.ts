@@ -152,6 +152,59 @@ describe('PiAiAdapter provider routing', () => {
     expect(server.requests[0]).not.toHaveProperty('dsh_plugin_packages')
   })
 
+  it('disables supported title reasoning without changing the conversation effort', async () => {
+    const server = await mockServer([{ events: textEvents }, { events: textEvents }])
+    const ctx = await harness(server.url, { reasoning: 'max' })
+    await assemble(ctx, {
+      model: 'deepseek-v4-pro',
+      reasoningEffort: ReasoningEffortId('high'),
+      purpose: 'session-title',
+      maxTokens: 64,
+      messages: [],
+    })
+    expect(server.requests[0]).toMatchObject({ thinking: { type: 'disabled' }, max_tokens: 64 })
+    expect(server.requests[0]).not.toHaveProperty('reasoning_effort')
+
+    await assemble(ctx, { model: 'deepseek-v4-pro', messages: [] })
+    expect(server.requests[1]).toMatchObject({ thinking: { type: 'enabled' }, reasoning_effort: 'max' })
+  })
+
+  it.each([
+    { levels: { off: 'none', medium: 'medium' }, expected: 'none' },
+    { levels: { medium: 'medium' }, expected: 'medium' },
+  ])('honors title off support and its wire mapping: $expected', async ({ levels, expected }) => {
+    const server = await mockServer([{ events: textEvents }])
+    const ctx = new Context()
+    await ctx.plugin(LlmRuntime)
+    await ctx.plugin(LlmPiAi, {
+      providers: {
+        'qwen-local': {
+          apiKeyEnv: 'PI_TEST_KEY',
+          api: 'openai-completions',
+          baseURL: server.url,
+          reasoning: 'medium',
+          models: [{
+            id: 'qwen-test',
+            contextWindow: 200000,
+            maxTokens: 32768,
+            reasoningEfforts: levels,
+          }],
+        },
+      },
+    })
+    await assemble(ctx, {
+      provider: 'qwen-local', model: 'qwen-test', purpose: 'session-title', maxTokens: 64, messages: [],
+    })
+    expect(server.requests[0]).toMatchObject({ reasoning_effort: expected, max_completion_tokens: 64 })
+
+    const invalid = await assemble(ctx, {
+      provider: 'qwen-local', model: 'qwen-test', purpose: 'session-title',
+      reasoningEffort: ReasoningEffortId('xhigh'), messages: [],
+    })
+    expect(invalid.finish).toMatchObject({ kind: 'error', failure: { code: 'UNSUPPORTED_REASONING_EFFORT' } })
+    expect(server.requests).toHaveLength(1)
+  })
+
   it('sends preserve_thinking only when the profile asks for it', async () => {
     const server = await mockServer([{ events: textEvents }, { events: textEvents }])
     const on = await harness(server.url, { preserveThinking: true })
