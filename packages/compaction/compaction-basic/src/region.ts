@@ -486,7 +486,11 @@ function commitCompactionBody(
     checkpointMessage,
   } = summarized
   const callRecord = summarized.llmStreamCall === true
-    ? { rawOutput: summarized.rawOutput, llmStreamCall: true as const }
+    ? {
+      rawOutput: summarized.rawOutput,
+      llmStreamCall: true as const,
+      ...summarized.rejectedOutput === undefined ? {} : { rejectedOutput: summarized.rejectedOutput },
+    }
     : summarized.rawOutput === undefined ? {} : { rawOutput: summarized.rawOutput }
   const summaryEvent = session.append('compaction/summary', {
     compactionId: startEvent.data.compactionId,
@@ -559,6 +563,7 @@ function buildSummarizationInput(
   return {
     ...header?.tools === undefined ? {} : { tools: header.tools },
     messages: system === null ? regionMessages : [system, ...regionMessages],
+    surface: session.deriveMessages(),
   }
 }
 

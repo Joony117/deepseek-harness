@@ -1,0 +1,9 @@
+version: 1
+scenario: compaction-pending-tool-result
+profile: headless
+composition: compaction-pending-tool-result
+recording: authored
+header:
+  class: compaction-pending-tool-result
+  pin: true
+  changes: 1

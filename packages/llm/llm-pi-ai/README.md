@@ -104,6 +104,8 @@ A profile's `models` list replaces the route's installed catalog rather than ext
 
 For self-hosted Chat Completions endpoints, `thinkingTokenBudgetField` selects the reasoning-budget parameter, and `vllmPriority` sets an integer scheduler priority when the server enables priority scheduling. Template arguments accept `$var: thinking.budget`. `openai-responses` gateways can set `supportsMaxOutputTokens: false` to omit `max_output_tokens`; Azure and Codex transports ignore this shared compatibility field. These controls are opt-in; catalog-owned Anthropic effort and fallback capabilities are not configurable switches.
 
+Auxiliary requests with `purpose: 'session-title'` select `off` when the model declares support, using its configured wire spelling (for example, `off: none` for a self-hosted Chat Completions endpoint). Models without that capability retain the selected effort. Unsupported explicit efforts still fail before dispatch, and ordinary conversation requests retain their configured effort.
+
 ### Change configuration at runtime
 
 Each operation captures the current `providers` Config reference. New or changed provider profiles are validated before form persistence; unchanged catalog failures remain editable. Route-set or retry-policy changes update registration atomically, preserving previous routes if another adapter owns a requested route.

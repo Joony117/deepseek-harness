@@ -1,4 +1,4 @@
-import { ToolCallId, createUserMessage } from '@deepseek-ai/dsh-llm'
+import { LlmError, ToolCallId, createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { ContextFormed } from '@deepseek-ai/dsh-llm'
 import { describe, expect, it } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
@@ -350,6 +350,105 @@ describe('startInProcessRun', () => {
     const child = ctx.agents.get(run.id)!
     expect(child.options).toEqual({ subagentDepth: 1 })
     await expect(run.result).resolves.toMatchObject({ stopReason: 'error' })
+    await run.dispose()
+  })
+
+  it('carries the logged model failure as the error diagnostic', async () => {
+    const { ctx } = await setup([])
+    const parent = await ctx.agentLoop.create(SessionId('failing-parent'), {})
+    const run = await startInProcessRun(request(parent), {})
+    const result = await run.result
+    const child = ctx.agents.get(run.id)!
+    const turnEnd = child.session.snapshotEvents().findLast(event => event.type === 'turn/end')
+    const failure = turnEnd?.type === 'turn/end' && turnEnd.data.reason.kind === 'error' ? turnEnd.data.reason.error : undefined
+    expect(failure).toBeDefined()
+    expect(result.stopReason).toBe('error')
+    expect(result.diagnostic).toBe(`${failure!.code}: ${failure!.message}`)
+    await run.dispose()
+  })
+
+  it('bounds a provider failure diagnostic with its HTTP status', async () => {
+    const { parent } = await setup([() => { throw new LlmError('x'.repeat(5000), 'BAD_REQUEST', { status: 400 }) }])
+    const run = await startInProcessRun(request(parent), {})
+    const result = await run.result
+    expect(result.stopReason).toBe('error')
+    expect(result.diagnostic).toMatch(/^BAD_REQUEST \(HTTP 400\): x+\.\.\.$/)
+    expect(Buffer.byteLength(result.diagnostic!)).toBe(4093)
+    await run.dispose()
+  })
+
+  it('stops a child at its step limit and reports the spent budget', async () => {
+    const { ctx, parent, adapter } = await setup([
+      toolCallResponse('c1', 'noop', {}),
+      toolCallResponse('c2', 'noop', {}, 'still trying'),
+      toolCallResponse('c3', 'noop', {}),
+    ])
+    const disposeNoop = ctx.tools.register(defineContentToolFixture({
+      name: 'noop', description: 'probe', parameters: {},
+      execute() { return Promise.resolve([{ type: 'text', text: 'noop result' }]) },
+    }))
+    const run = await startInProcessRun(request(parent), { limits: { maxSteps: 2 } })
+    const result = await run.result
+    expect(adapter.requests).toHaveLength(2)
+    expect(result).toMatchObject({ stopReason: 'error', diagnostic: 'child stopped after its limit of 2 model steps' })
+    expect(text(result.output)).toBe('still trying')
+    await run.dispose()
+    disposeNoop()
+  })
+
+  it('cancels a child at its wall-clock deadline and keeps its partial output', async () => {
+    const { parent } = await setup(['hang'])
+    const run = await startInProcessRun(request(parent), { limits: { deadlineMs: 30 } })
+    await expect(run.result).resolves.toEqual({
+      output: [{ type: 'text', text: 'partial' }],
+      stopReason: 'error',
+      diagnostic: 'child stopped at its 30ms wall-clock deadline',
+    })
+    await run.dispose()
+  })
+
+  it('cancels a child that starts no model step within its stall limit', async () => {
+    const { parent } = await setup(['hang'])
+    const run = await startInProcessRun(request(parent), { limits: { stallMs: 30 } })
+    await expect(run.result).resolves.toEqual({
+      output: [{ type: 'text', text: 'partial' }],
+      stopReason: 'error',
+      diagnostic: 'child stopped: no new model step started for 30ms',
+    })
+    await run.dispose()
+  })
+
+  it('restarts the stall limit at every step, so progressing work runs past it', async () => {
+    const { ctx, parent, adapter } = await setup([
+      toolCallResponse('c1', 'slow', {}),
+      toolCallResponse('c2', 'slow', {}),
+      toolCallResponse('c3', 'slow', {}),
+      textResponse('done'),
+    ])
+    const disposeSlow = ctx.tools.register(defineContentToolFixture({
+      name: 'slow', description: 'probe', parameters: {},
+      async execute() {
+        await new Promise(resolve => setTimeout(resolve, 60))
+        return [{ type: 'text', text: 'slow result' }]
+      },
+    }))
+    // Each step waits 60ms on its tool; the run takes ~180ms in total, past 100ms.
+    const run = await startInProcessRun(request(parent), { limits: { stallMs: 100 } })
+    const result = await run.result
+    expect(adapter.requests).toHaveLength(4)
+    expect(result).toMatchObject({ stopReason: 'completed' })
+    expect(text(result.output)).toBe('done')
+    await run.dispose()
+    disposeSlow()
+  })
+
+  it('keeps a parent cancellation aborted while a deadline is pending', async () => {
+    const { parent } = await setup(['hang'])
+    const controller = new AbortController()
+    const run = await startInProcessRun(request(parent, controller.signal), { limits: { deadlineMs: 2 ** 31 - 1 } })
+    await new Promise(resolve => setTimeout(resolve, 30))
+    controller.abort()
+    await expect(run.result).resolves.toMatchObject({ stopReason: 'aborted' })
     await run.dispose()
   })
 

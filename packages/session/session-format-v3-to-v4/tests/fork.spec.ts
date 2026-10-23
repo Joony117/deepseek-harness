@@ -92,6 +92,13 @@ describe('V4 fork results', () => {
       const original = child.snapshotEvents().find(event => event.type === 'tool/result')!
       child.append('turn/start', { turn: 2 })
       child.append('step/start', { turn: 2, step: 1 })
+      child.append('assistant/message', {
+        stream: [], turn: 2, step: 1,
+        message: createMessage({
+          role: 'assistant', content: [{ type: 'text', text: 'Inherited result processed.' }],
+          source: { kind: 'model', provider: 'test', model: 'test' },
+        }),
+      }, { surfaceOp: 'append' })
       const pruned = pruner.pruneSession(child)
       expect(pruned.pruned).toHaveLength(1)
       child.append('step/end', { turn: 2, step: 1 })

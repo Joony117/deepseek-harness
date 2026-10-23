@@ -284,13 +284,8 @@ describe('dsh-tool-skill', () => {
 
     const prefix = await composePrefix(ctx, '/workspace')
 
+    // A fresh session's catalog leads the batch: a prefix shared across sessions.
     expect(prefix).toEqual([
-      {
-        id: expect.any(String) as unknown,
-        role: 'user',
-        content: [{ type: 'text', text: 'later contribution' }],
-        source: { kind: 'later-contribution' },
-      },
       {
         id: expect.any(String) as unknown,
         role: 'user',
@@ -321,8 +316,14 @@ describe('dsh-tool-skill', () => {
           ].join('\n'),
         }],
       },
+      {
+        id: expect.any(String) as unknown,
+        role: 'user',
+        content: [{ type: 'text', text: 'later contribution' }],
+        source: { kind: 'later-contribution' },
+      },
     ])
-    const rendered = JSON.stringify(prefix[1])
+    const rendered = JSON.stringify(prefix[0])
     expect(rendered).not.toContain('whenToUse')
     expect(rendered).not.toContain('secret-source')
     expect(rendered).not.toContain('/secret/path')
@@ -1023,9 +1024,9 @@ describe('user-explicit invocation injection', () => {
     const decision = await proposeStep(ctx, agent, [first, second])
     if (decision.kind !== 'enter') throw new Error('expected enter')
     const kinds = decision.messages.map(message => (message.source as { kind: string }).kind)
-    // Background injections (the catalog here) sit between the claimed batch
-    // and the invoked body: the material the model must act on comes last.
-    expect(kinds.slice(0, 2)).toEqual(['user', 'user'])
+    // A fresh session's catalog leads; the invoked body still follows the
+    // claimed batch: the material the model must act on comes last.
+    expect(kinds.slice(0, 3)).toEqual(['skill-catalog', 'user', 'user'])
     expect(kinds.at(-1)).toBe('skill-invocation')
     expect(kinds.indexOf('skill-catalog')).toBeLessThan(kinds.indexOf('skill-invocation'))
     const injection = decision.messages.at(-1)!

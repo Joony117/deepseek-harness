@@ -41,7 +41,7 @@ With these rows, oversized tool results are trimmed automatically as part of con
 
 ### What gets trimmed
 
-Every tool result whose text exceeds the threshold is replaced by a trimmed version: the configured head, a short "middle pruned" marker, and the configured tail. Rich content such as images and structured blocks keeps its order and all logged image-offload selections. The replacement keeps the tool call, step, errors, and metadata — only the text content changes. If a replacement cannot be recorded, the run fails and the trims already applied stay in place.
+An over-budget tool result becomes eligible only after a later assistant message appears in the current conversation. Pending results stay intact through their first model response, including parallel calls and resumed sessions. Eligible results are replaced by the configured head, a short "middle pruned" marker, and the configured tail. Rich content such as images and structured blocks keeps its order and all logged image-offload selections. The replacement keeps the tool call, step, errors, and metadata — only the text content changes. If a replacement cannot be recorded, the run fails and the trims already applied stay in place.
 
 ### Setting the size limits
 
@@ -133,6 +133,7 @@ These limits define when trimming is a poor fit or needs special care; they are 
 
 - **Character budgets are not token budgets** — provider token density varies, so `ctx.tokenMeter` remains the authority for deciding whether trimming relieved request pressure.
 - **Pruning is syntactic** — it retains the beginning and end without interpreting which middle lines are semantically important.
+- **Unread output can exceed the request budget** — when no older balanced history can be condensed, overflow recovery fails without trimming the pending result.
 - **Grapheme clusters can split** — code-point slicing protects surrogate pairs but does not perform locale-aware grapheme segmentation.
 
 <a id="dev-note"></a>

@@ -1623,7 +1623,7 @@ describe('workspace context request injection', () => {
     }
   })
 
-  it('enters the baseline right after the claimed prompt in the first pre-step without queuing another step', async () => {
+  it('enters the baseline ahead of the claimed prompt in a fresh session without queuing another step', async () => {
     const root = await tempRepo()
     const home = await tempRepo()
     try {
@@ -1647,9 +1647,9 @@ describe('workspace context request injection', () => {
       expect(decision).toMatchObject({ kind: 'enter' })
       if (decision.kind !== 'enter') throw new Error('workspace baseline was rejected')
       expect(decision.messages).toHaveLength(2)
-      expect(decision.messages[0]).toBe(prompt)
-      expect(decision.messages[1]?.source).toMatchObject({ kind: 'agent-instructions', baseline: true })
-      expect(blocksText(decision.messages[1]?.content)).toContain('Instructions from: AGENTS.md')
+      expect(decision.messages[1]).toBe(prompt)
+      expect(decision.messages[0]?.source).toMatchObject({ kind: 'agent-instructions', baseline: true })
+      expect(blocksText(decision.messages[0]?.content)).toContain('Instructions from: AGENTS.md')
       expect(agent.inbox.nextStep).toHaveLength(0)
     } finally {
       await rm(root, { recursive: true, force: true })
