@@ -623,6 +623,8 @@ interface LlmResolvedModelInfo extends LlmModelInfo {
   systemPromptUpdate?: SystemPromptUpdate
   /** Declared mid-conversation tool declaration handling; absent means every request declares the complete tool list. */
   toolUpdate?: ToolUpdate
+  /** Declared prompt-cache reuse shape; absent means unknown. */
+  promptCache?: PromptCacheReuse
 }
 ```
 
