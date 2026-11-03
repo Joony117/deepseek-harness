@@ -21,6 +21,9 @@
       "path": "../goal"
     },
     {
+      "path": "../../jobs/jobs"
+    },
+    {
       "path": "../../llm/llm"
     },
     {
