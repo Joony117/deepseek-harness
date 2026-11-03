@@ -46,6 +46,9 @@ kind: "package-reference"
 | 字段 | 默认值 | 含义 |
 |---|---|---|
 | `providerName` | `spawn` | 注册到 `ctx.subagents` 的提供方名称 |
+| `maxSteps` | 不限 | 每条父级消息之后子级最多可进入的模型步数；超出的那一步不会发出 |
+| `deadlineMs` | 不限 | 每条父级消息之后子级可运行的毫秒数；空闲时间不计 |
+| `stallMs` | 不限 | 子级未开始新模型步骤时可持续运行的毫秒数，工具调用内的时间也计入 |
 
 生成的[配置目录](../../../docs/config-catalog.zh.md#deepseek-aidsh-subagent-spawn-in-process)是每个受支持字段及其 JSDoc 的穷尽式真源。
 
@@ -120,7 +123,7 @@ kind: "package-reference"
 
 #### 模型看到什么
 
-通过 `dsh-tool-subagent`，父级先收到子级名称，随后收到包含最终答案的完成通知。子级自行编写的消息通过 `send_message` 到达。子级内部工具调用保留在子会话中。
+通过 `dsh-tool-subagent`，父级先收到子级名称，随后收到包含最终答案的完成通知。子级自行编写的消息通过 `send_message` 到达。子级内部工具调用保留在子会话中。当配置的限制停止子级（连同其自身的子级）时，通知报告失败，并以诊断结尾，例如 `child stopped after its limit of 200 model steps`。
 
 #### Token 影响
 
@@ -138,6 +141,7 @@ kind: "package-reference"
 这些限制说明何时选择该后端是错误的；它们是当前包约束。
 
 - **全新表示不含父级 transcript（文本记录）**——子 agent 继承 cwd、谱系、提供方、模型、推理强度及输出 token 上限，但不继承父级的任何对话；需要已完成轮次上下文时，请使用 fork 后端。
+- **限制随提供方名称生效**——冷恢复的子级从其记录名称对应的已注册提供方读取 `maxSteps`、`deadlineMs` 与 `stallMs`；该提供方不存在时，子级不受限制地运行。
 
 <a id="dev-note"></a>
 ### 开发备注

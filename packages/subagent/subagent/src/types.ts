@@ -375,7 +375,9 @@ export interface SubagentProvider {
    * presence selects local activation execution. Providers without it execute
    * through start and do not accept subsequent messages.
    *
-   * This is the provider's ONLY participation in a continuable child. The
+   * Besides the static `messageLimits`, which the manager reads by provider
+   * name at every materialization including cold resume, this is the
+   * provider's only participation in a continuable child. The
    * continuation manager owns identity reservation, composition, Agent
    * creation, prompt delivery, cold resume, ownership, and disposal, so a
    * provider never sees the child's Agent, handle, turns, or teardown.

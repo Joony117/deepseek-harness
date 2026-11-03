@@ -50,6 +50,9 @@ Load the subagent service and this backend, then configure a delegation tool. Th
 | Field | Default | Meaning |
 |---|---|---|
 | `providerName` | `fork` | Provider name registered on `ctx.subagents` |
+| `maxSteps` | unbounded | Most model steps a child may enter after each parent message; the step past it is never sent |
+| `deadlineMs` | unbounded | Running milliseconds a child may spend after each parent message; idle time does not count |
+| `stallMs` | unbounded | Running milliseconds a child may go without starting a model step, including time inside a tool call |
 
 The generated [configuration catalog](../../../docs/config-catalog.md#deepseek-aidsh-subagent-fork-in-process) is the exhaustive source for every accepted field and its JSDoc.
 
@@ -123,7 +126,7 @@ The child may reuse the inherited byte-identical prefix under the same provider 
 
 #### What the model sees
 
-Through `dsh-tool-subagent`, the parent first receives the child's name, then a completion notice with its final answer. Child-authored messages arrive through `send_message`; the inherited prefix and internal work remain in the child session.
+Through `dsh-tool-subagent`, the parent first receives the child's name, then a completion notice with its final answer. Child-authored messages arrive through `send_message`; the inherited prefix and internal work remain in the child session. When a configured limit stops the child, together with its own children, the notice reports a failure and ends with a diagnostic such as `child stopped after its limit of 200 model steps`.
 
 #### Token effect
 
@@ -143,6 +146,7 @@ These limits define when the backend is the wrong choice; they are current packa
 - **The seed is a one-time snapshot** — the child sees the parent's completed turns as of the fork and nothing the parent logs afterwards; there is no live context sharing.
 - **Prefix reuse depends on matching request inputs** — parent and child messaging definitions match byte for byte; structured output, generated-SDK, route changes, or restored historical overrides can still break equality. Rationale: the [cache-preserving fork Agent Note](../../../.agents/notes/implemented/architecture/2026-08-10-fork-children-stay-one-shot.md).
 - **Shipped fork tools do not expose child LLM route selection** — they inherit the parent's provider and model so the copied history remains eligible for KV Cache reuse. Route selection stays disabled until a change can preserve reuse or expose a bounded recomputation cost.
+- **Limits follow the provider name** — a cold-resumed child reads `maxSteps`, `deadlineMs` and `stallMs` from the provider registered under its recorded name; when that provider is gone, the child runs without limits.
 
 <a id="dev-note"></a>
 ### Dev Note

@@ -46,6 +46,9 @@ Load the subagent service and this backend, then configure one delegation tool p
 | Field | Default | Meaning |
 |---|---|---|
 | `providerName` | `spawn` | Provider name registered on `ctx.subagents` |
+| `maxSteps` | unbounded | Most model steps a child may enter after each parent message; the step past it is never sent |
+| `deadlineMs` | unbounded | Running milliseconds a child may spend after each parent message; idle time does not count |
+| `stallMs` | unbounded | Running milliseconds a child may go without starting a model step, including time inside a tool call |
 
 The generated [configuration catalog](../../../docs/config-catalog.md#deepseek-aidsh-subagent-spawn-in-process) is the exhaustive source for every accepted field and its JSDoc.
 
@@ -120,7 +123,7 @@ The child's request cache is independent of the parent's. Child history grows ap
 
 #### What the model sees
 
-Through `dsh-tool-subagent`, the parent first receives the child's name, then a completion notice with its final answer. Child-authored messages arrive through `send_message`. Internal child tool calls remain in the child session.
+Through `dsh-tool-subagent`, the parent first receives the child's name, then a completion notice with its final answer. Child-authored messages arrive through `send_message`. Internal child tool calls remain in the child session. When a configured limit stops the child, together with its own children, the notice reports a failure and ends with a diagnostic such as `child stopped after its limit of 200 model steps`.
 
 #### Token effect
 
@@ -138,6 +141,7 @@ Append-only; newly visible content follows the reusable request prefix and does 
 These limits define when the backend is the wrong choice; they are current package constraints.
 
 - **Fresh means no parent transcript** — the child inherits cwd, lineage, provider, model, reasoning effort, and output-token limit, but none of the parent's conversation; use the fork backend when completed-turn context is required.
+- **Limits follow the provider name** — a cold-resumed child reads `maxSteps`, `deadlineMs` and `stallMs` from the provider registered under its recorded name; when that provider is gone, the child runs without limits.
 
 <a id="dev-note"></a>
 ### Dev Note
