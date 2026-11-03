@@ -3170,8 +3170,10 @@ describe('continuable settlement delivery', () => {
     // waiting on was claimed out of the inbox and then swallowed by the failure.
     const child = await loadStoredSession(ctx.sessionPersistence, started.childId)
     expect(hasUserText(child.events, 'second task')).toBe(false)
+    // The failure that ended the turn reaches the parent as the run diagnostic.
     expect(settlementNotices(parent)[0]!.text).toBe(
-      `Background subagent ${started.name} failed before it finished.\nIts closing message:\nthe answer`,
+      `Background subagent ${started.name} failed before it finished.\nIts closing message:\nthe answer
+UNKNOWN: ENOSPC: no space left on device`,
     )
   })
 
