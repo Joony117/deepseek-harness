@@ -87,13 +87,15 @@ it('continues the parent through default Messages after a reasoning-bearing cont
     expect(notice?.source).toMatchObject({
       stopReason: 'completed', senderSessionId: started.childId,
     })
+    // The notice opens this parent's first turn, so the fork's fresh-session
+    // ordering puts the runtime-context snapshot ahead of it.
     const noticeWithContext = [
-      ...closingContent,
       {
         type: 'text',
         text: '<system-reminder>\nThe following information describes your current session:\n\n'
           + `Current working directory: ${JSON.stringify(process.cwd())}.\n</system-reminder>`,
       },
+      ...closingContent,
     ]
     expect(requests[1]?.body).toMatchObject({ messages: [{ role: 'user', content: noticeWithContext }] })
 
