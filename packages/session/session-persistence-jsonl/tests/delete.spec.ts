@@ -22,7 +22,7 @@ import {
   SessionAlreadyExistsError, SessionAlreadyOwnedError, SessionDeleteConflictError, SessionPersistenceNotFoundError,
 } from '@deepseek-ai/dsh-session-persistence'
 import type { SessionPersistence } from '@deepseek-ai/dsh-session-persistence'
-import JsonlSessionPersistence from '@deepseek-ai/dsh-session-persistence-jsonl'
+import * as JsonlSessionPersistence from '@deepseek-ai/dsh-session-persistence-jsonl'
 import type { JsonlCompression } from '@deepseek-ai/dsh-session-persistence-jsonl'
 import { generationLogPath, logPath, projectDir, sessionDir } from '../src/format.ts'
 import { compressZstdFrame, decompressZstdFrame, scanZstdFrames } from '../src/zstd.ts'
