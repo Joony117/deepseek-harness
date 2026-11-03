@@ -246,3 +246,22 @@ describe('dsh-subagent-fork-in-process', () => {
     expect(typeof unwrapped.apply).toBe('function')
   })
 })
+
+describe('per-message limit config', () => {
+  it('registers the configured limits with the provider and omits unset ones', async () => {
+    const { ctx } = await setup([])
+    await ctx.plugin(fork, { providerName: 'live', maxSteps: 200, stallMs: 1_800_000 })
+    expect(ctx.subagents.getProvider('live')?.messageLimits).toEqual({ maxSteps: 200, stallMs: 1_800_000 })
+    expect(ctx.subagents.getProvider('fork')?.messageLimits).toBeUndefined()
+    await ctx.fiber.dispose()
+  })
+
+  it.each([
+    ['maxSteps', 0],
+    ['maxSteps', 1.5],
+    ['deadlineMs', 0],
+    ['stallMs', 2 ** 31],
+  ] as const)('rejects %s = %s', (key, value) => {
+    expect(() => fork.Config({ providerName: 'invalid', [key]: value })).toThrow()
+  })
+})

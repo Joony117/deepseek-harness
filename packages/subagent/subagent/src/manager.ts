@@ -35,8 +35,9 @@ import type { ActivationObserver } from './lifecycle.ts'
 import type {
   ContinuableCreateRequest, ContinuableCreateSpec, SubagentInterruptAuthority,
   SubagentActivationSpec, SubagentActivation, SubagentStartRequest, SubagentRun,
-  SubagentSendMessageOptions, SubagentResult, ResolvedSubagentStartRequest,
+  SubagentSendMessageOptions, SubagentResult, ResolvedSubagentStartRequest, SubagentMessageLimits,
 } from './types.ts'
+import { MessageBudget } from './message-budget.ts'
 import { attachStructuredRuntime } from './structured.ts'
 import type { StructuredAttachment } from './structured.ts'
 import type { SubagentDelivery } from './control-types.ts'
@@ -63,6 +64,8 @@ interface SubagentHost {
   prepareContinuable(name: string, request: ContinuableCreateRequest): Promise<ContinuableCreateSpec>
   /** Build the lifecycle observer for one Activation residency epoch. */
   observeActivation(provider: string, childId: SessionId, parent: Agent): ActivationObserver
+  /** Read one provider's per-message limits for a child materializing now. */
+  messageLimits(provider: string): SubagentMessageLimits | undefined
 }
 
 /** Inputs shared by fresh and resumed Activation materialization. */
@@ -774,6 +777,7 @@ export class SubagentManager {
   /** Close admission synchronously and share one release, including startup rollback. */
   private close(activation: Activation, release: () => Promise<void>): Promise<void> {
     if (activation.closing !== undefined) return activation.closing
+    if (activation.kind === 'local') activation.budget?.stop()
     const completion = Promise.withResolvers<void>()
     activation.closing = completion.promise
     void release().then(completion.resolve, completion.reject)
@@ -921,7 +925,7 @@ export class SubagentManager {
           setup,
         })
 
-      resource = { kind: 'local', handle, outputStart: handle.agent.session.seq, structured, failureAt: undefined, poke: Promise.withResolvers<void>() }
+      resource = { kind: 'local', handle, outputStart: handle.agent.session.seq, structured, failureAt: undefined, poke: Promise.withResolvers<void>(), budget: undefined, limitStop: undefined }
     }
     const observer = this.host.observeActivation(provider, childId, parent)
 
@@ -952,6 +956,7 @@ export class SubagentManager {
         activation.handle.agent.ctx.on('agent/inbox/inserted', wakeSettlement)
         activation.handle.agent.ctx.on('agent/inbox/claimed', wakeSettlement)
         activation.handle.agent.ctx.on('agent/inbox/discarded', wakeSettlement)
+        this.enforceMessageLimits(activation, provider)
       }
       observer.start(activationAgent(activation))
     } catch (error: unknown) {
@@ -1428,12 +1433,53 @@ export class SubagentManager {
     this.assertAdmitting(parent)
     this.authorizeLineage(parent, activation.childId, activation.parent.id)
     this.acquireOwnership(parent, activation.childId)
+    // Recorded before delivery so a claim during delivery still restarts the budget.
+    if (activation.kind === 'local') activation.budget?.admitted(message.id)
     try {
       this.deliver(activation, message, options.delivery)
     } finally {
       this.wake(activation)
     }
     return message.id
+  }
+
+  /**
+   * Enforce one provider's per-message limits on a local Activation. They
+   * restart when a turn claims a message accepted through
+   * {@link submitAdmitted}; time counts only while the child runs. A limit reached first records its
+   * diagnostic and disposes the Activation, which also stops owned children;
+   * a stop already in progress keeps its own result.
+   * @param activation - the local Activation just published.
+   * @param provider - provider name whose configured limits apply.
+   */
+  private enforceMessageLimits(activation: LocalActivation, provider: string): void {
+    const limits = this.host.messageLimits(provider)
+    if (limits === undefined) return
+    const child = activation.handle.agent
+    const budget = new MessageBudget(limits, (diagnostic) => {
+      if (activation.closing !== undefined) return
+      activation.limitStop = diagnostic
+      // Never awaited: disposal waits for the driver that may be inside this
+      // Activation's own pre-step, so awaiting here would deadlock.
+      void this.dispose(activation).catch((error: unknown) => { this.reportTeardownFailure(activation, error) })
+    })
+    activation.budget = budget
+    child.ctx.on('agent/inbox/claimed', ({ agent, message }) => {
+      if (agent === child) budget.claimed(message.id)
+    })
+    child.ctx.on('agent/status', ({ agent, status }) => {
+      if (agent !== child) return
+      if (status === 'running') budget.running()
+      else budget.idle()
+    })
+    child.ctx.on('agent/pre-step', async ({ agent }, next) => {
+      if (agent !== child) return next()
+      budget.stepProposed()
+      const decision = await next()
+      // The step past the limit never reaches the model.
+      return decision.kind !== 'enter' || budget.stepEntered() ? decision : { kind: 'reject' }
+    })
+    if (child.status === 'running') budget.running()
   }
 
   /** Refuse image content for a child whose fixed model accepts text only. */

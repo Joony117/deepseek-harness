@@ -15,8 +15,10 @@ import type {
   ContinuableCreateRequest,
   ContinuableCreateSpec,
   SubagentCapabilities,
+  SubagentMessageLimits,
   SubagentProvider,
 } from '@deepseek-ai/dsh-subagent'
+import { messageLimitsFrom } from '@deepseek-ai/dsh-subagent'
 
 export const name = 'subagent-fork-in-process'
 // `tools` is deliberately NOT injected — same rationale as subagent-spawn-in-process: the
@@ -29,10 +31,22 @@ export const inject = ['subagents']
 export interface Config {
   /** Provider name on `ctx.subagents` (default `fork`). */
   providerName: string
+  /** Most model steps one child may enter after each parent message; omit for no step cap. */
+  maxSteps?: number
+  /**
+   * Running milliseconds one child may spend after each parent message before it
+   * is stopped; idle time does not count. Omit for no deadline.
+   */
+  deadlineMs?: number
+  /** Running milliseconds one child may go without starting a model step before it is stopped; omit for no stall limit. */
+  stallMs?: number
 }
 
 export const Config: z<Config> = z.object({
   providerName: z.string().default('fork'),
+  maxSteps: z.number().step(1).min(1).max(Number.MAX_SAFE_INTEGER),
+  deadlineMs: z.number().step(1).min(1).max(2 ** 31 - 1),
+  stallMs: z.number().step(1).min(1).max(2 ** 31 - 1),
 })
 
 /**
@@ -67,7 +81,7 @@ class ForkInProcessProvider implements SubagentProvider {
   // Context contract: a forked child IS seeded with the parent's completed-turn prefix.
   readonly inheritsParentContext = true
 
-  constructor(readonly name: string) {}
+  constructor(readonly name: string, readonly messageLimits: SubagentMessageLimits | undefined) {}
 
   prepareContinuable(request: ContinuableCreateRequest): Promise<ContinuableCreateSpec> {
     // The fork prefix is captured ONCE, at creation: it becomes part of the
@@ -79,5 +93,5 @@ class ForkInProcessProvider implements SubagentProvider {
 }
 
 export function apply(ctx: Context, config: Config): void {
-  ctx.subagents.registerProvider(new ForkInProcessProvider(config.providerName))
+  ctx.subagents.registerProvider(new ForkInProcessProvider(config.providerName, messageLimitsFrom(config)))
 }

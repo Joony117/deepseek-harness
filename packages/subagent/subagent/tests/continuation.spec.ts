@@ -4043,3 +4043,180 @@ describe('SubagentRuntime.interrupt', () => {
     await drained
   })
 })
+
+describe('per-message limits', () => {
+  type Limits = Omit<SubagentSpawn.Config, 'providerName'>
+
+  /** Mount a spawn provider named `bounded` with `limits`, plus `noop` and `slow` tools. */
+  async function boundedWith(adapter: LlmAdapter, limits: Limits) {
+    const booted = await setupWith(adapter)
+    await booted.ctx.plugin(SubagentSpawn, { providerName: 'bounded', ...limits })
+    for (const [name, delayMs] of [['noop', 0], ['slow', 60]] as const) {
+      booted.ctx.tools.register(defineTool({
+        name,
+        description: 'does nothing',
+        parameters: {},
+        output: {
+          schema: { type: 'object', additionalProperties: false, properties: {} },
+          render: () => [{ type: 'text', text: name }],
+        },
+        execute: () => new Promise<object>((resolve) => { setTimeout(() => { resolve({}) }, delayMs) }),
+      }))
+    }
+    return booted
+  }
+
+  async function bounded(script: Script, limits: Limits) {
+    const adapter = new MockAdapter(script)
+    return { ...await boundedWith(adapter, limits), adapter }
+  }
+
+  function childRequests(adapter: { requests: GenerateOptions[] }, childId: SessionId): GenerateOptions[] {
+    return adapter.requests.filter(request => request.sessionId === childId)
+  }
+
+  it('stops a child at its step limit before the next model call, keeping its partial output', async () => {
+    const { ctx, parent, adapter } = await bounded([
+      toolCallResponse('s1', 'noop', {}, 'step one'),
+      toolCallResponse('s2', 'noop', {}, 'step two'),
+      textResponse('never requested'),
+    ], { maxSteps: 2 })
+    const started = await ctx.subagents.startActivation({ ...startSpec(parent, 'bounded'), delivery: 'caller' })
+    try {
+      const result = await started.result
+      expect(result).toMatchObject({ stopReason: 'error', diagnostic: 'child stopped after its limit of 2 model steps' })
+      expect(result.output).toContainEqual({ type: 'text', text: 'step two' })
+      expect(childRequests(adapter, started.childId)).toHaveLength(2)
+      await waitNoActivation(ctx, started.childId)
+    } finally {
+      await started.dispose()
+      await ctx.fiber.dispose()
+    }
+  })
+
+  it('stops a child that runs past its deadline', async () => {
+    const { ctx, parent } = await bounded(['hang'], { deadlineMs: 50 })
+    const started = await ctx.subagents.startActivation({ ...startSpec(parent, 'bounded'), delivery: 'caller' })
+    try {
+      await expect(started.result).resolves.toMatchObject({
+        stopReason: 'error',
+        diagnostic: 'child stopped at its 50ms deadline',
+      })
+      await waitNoActivation(ctx, started.childId)
+    } finally {
+      await started.dispose()
+      await ctx.fiber.dispose()
+    }
+  })
+
+  it('stops a child that starts no new model step within its stall limit', async () => {
+    const { ctx, parent } = await bounded(['hang'], { stallMs: 50 })
+    const started = await ctx.subagents.startActivation({ ...startSpec(parent, 'bounded'), delivery: 'caller' })
+    try {
+      await expect(started.result).resolves.toMatchObject({
+        stopReason: 'error',
+        diagnostic: 'child stopped: no new model step started for 50ms',
+      })
+      await waitNoActivation(ctx, started.childId)
+    } finally {
+      await started.dispose()
+      await ctx.fiber.dispose()
+    }
+  })
+
+  it('lets a slow child that keeps starting steps outlive its stall limit', async () => {
+    const { ctx, parent, adapter } = await bounded([
+      ...Array.from({ length: 5 }, (_, step) => toolCallResponse(`slow-${step}`, 'slow', {})),
+      textResponse('done'),
+    ], { stallMs: 250 })
+    const started = await ctx.subagents.startActivation({ ...startSpec(parent, 'bounded'), delivery: 'caller' })
+    try {
+      // Five 60ms tool calls run well past 250ms in total, but no gap between steps reaches it.
+      await expect(started.result).resolves.toMatchObject({ stopReason: 'completed', output: [{ type: 'text', text: 'done' }] })
+      expect(childRequests(adapter, started.childId)).toHaveLength(6)
+    } finally {
+      await started.dispose()
+      await ctx.fiber.dispose()
+    }
+  })
+
+  it('gives a message queued while the child still runs its own budget once a turn claims it', async () => {
+    const releaseFirst = Promise.withResolvers<undefined>()
+    const adapter = new GatedAdapter([
+      { chunks: toolCallResponse('a1', 'noop', {}), gate: releaseFirst.promise },
+      { chunks: textResponse('first done') },
+      { chunks: toolCallResponse('b1', 'noop', {}) },
+      { chunks: textResponse('second done') },
+    ])
+    const { ctx, parent } = await boundedWith(adapter, { maxSteps: 2 })
+    parkParent(ctx, parent)
+    const ends: SubagentRunEndInfo[] = []
+    ctx.on('subagent/end', (info) => { ends.push(info) })
+    const started = await ctx.subagents.startActivation({ ...startSpec(parent, 'bounded'), delivery: 'parent' })
+    await vi.waitFor(() => { expect(adapter.requests).toHaveLength(1) })
+    // Accepted while the first message's work is still running: restarting the
+    // budget now would charge that remaining work to this message.
+    await queuePrompt(ctx, parent, started.childId, message('second task'))
+    releaseFirst.resolve(undefined)
+    await waitNoActivation(ctx, started.childId)
+    await vi.waitFor(() => { expect(ends).toHaveLength(1) })
+
+    // Four steps in one Activation, two per message: each message stayed within maxSteps 2.
+    expect(ends[0]!.stopReason).toBe('completed')
+    expect(childRequests(adapter, started.childId)).toHaveLength(4)
+  })
+
+  it('restarts the budget for a message that cold-resumes the child, and still enforces it', async () => {
+    const { ctx, parent, adapter } = await bounded([
+      toolCallResponse('a1', 'noop', {}),
+      textResponse('first done'),
+      toolCallResponse('b1', 'noop', {}),
+      toolCallResponse('b2', 'noop', {}),
+      textResponse('never requested'),
+    ], { maxSteps: 2 })
+    parkParent(ctx, parent)
+    const ends: SubagentRunEndInfo[] = []
+    ctx.on('subagent/end', (info) => { ends.push(info) })
+    const started = await ctx.subagents.startActivation({ ...startSpec(parent, 'bounded'), delivery: 'parent' })
+    await waitNoActivation(ctx, started.childId)
+    await vi.waitFor(() => { expect(ends).toHaveLength(1) })
+    expect(ends[0]!.stopReason).toBe('completed')
+
+    // The resumed Activation consults no provider, yet the limits apply afresh:
+    // two more steps run, and the third is refused.
+    await queuePrompt(ctx, parent, started.childId, message('second task'))
+    await waitNoActivation(ctx, started.childId)
+    await vi.waitFor(() => { expect(ends).toHaveLength(2) })
+    expect(ends[1]!.stopReason).toBe('error')
+    expect(childRequests(adapter, started.childId)).toHaveLength(4)
+  })
+
+  it('reports a stop the caller asked for as aborted while a limit is still pending', async () => {
+    const { ctx, parent, adapter } = await bounded(['hang'], { deadlineMs: 60_000, stallMs: 60_000, maxSteps: 5 })
+    const started = await ctx.subagents.startActivation({ ...startSpec(parent, 'bounded'), delivery: 'caller' })
+    try {
+      await vi.waitFor(() => { expect(childRequests(adapter, started.childId)).toHaveLength(1) })
+      await started.dispose()
+      await expect(started.result).resolves.toMatchObject({ stopReason: 'aborted' })
+      expect((await started.result).diagnostic).toBeUndefined()
+    } finally {
+      await ctx.fiber.dispose()
+    }
+  })
+
+  it('runs a provider without configured limits unbounded', async () => {
+    const { ctx, parent, adapter } = await bounded([
+      ...Array.from({ length: 4 }, (_, step) => toolCallResponse(`free-${step}`, 'noop', {})),
+      textResponse('done'),
+    ], {})
+    const started = await ctx.subagents.startActivation({ ...startSpec(parent, 'bounded'), delivery: 'caller' })
+    try {
+      await expect(started.result).resolves.toMatchObject({ stopReason: 'completed' })
+      expect(childRequests(adapter, started.childId)).toHaveLength(5)
+      expect(ctx.subagents.getProvider('bounded')?.messageLimits).toBeUndefined()
+    } finally {
+      await started.dispose()
+      await ctx.fiber.dispose()
+    }
+  })
+})

@@ -48,13 +48,8 @@ earlier moves (rc.1 cutover, rc.3 rebase, review rounds) lives in the tracker
 | (d2) strict preflight | under the same switch a compatibility-preflight denial throws instead of disabling the row; an `allow-version` exemption still admits it |
 | (h) retired plugin source | `ToolRunContext.deferContext` rewrites a 0.1.x `{ kind: 'plugin', plugin }` source to `{ kind: 'plugin:<name>' }`, other fields kept, as the v3→v4 migration names an unknown producer (v4 persistence refuses `plugin`; dsh-plugin-subscriptions' image_generate) |
 | (i) icon alias | ui-primitives exports `IconSparkle16 = IconSparkleRegular` for dsh-plugin-subscriptions' client half (else boot-client "did not activate"); the upstream icon-set test skips the alias |
+| (j) child limits | spawn/fork Config `maxSteps`, `deadlineMs`, `stallMs` (provider `messageLimits`). Per parent message: they restart when a turn claims a message the parent sent, and time counts only while the child runs. A hit disposes the Activation (owned children too) with `stopReason: 'error'` + diagnostic; a caller stop stays `aborted`. Re-read by provider name at cold resume; a resumed child whose provider is gone runs unbounded. Replaces the rc.2 in-process driver budgets (upstream removed that driver, 3d852a1cea) |
 | (e) this file | |
-
-**Held back at the rc.5 rebase.** Upstream removed `subagent-in-process-driver` (3d852a1cea, unified
-activation lifecycles), so the in-process child budgets `maxSteps`, `deadlineMs` and `stallMs`
-(fbb3bd493f, a0e5acc38b, a9485fac09 on the rc.2 branch) are not carried: continuable children
-need per-epoch vs per-lifecycle semantics decided first. Spawn/fork configs that still set these
-keys load without error at rc.5 (non-strict schema) and the budgets have no effect. The same commit's child failure diagnostic and goal job wait are carried.
 
 Generated catalogs, docs graphs and `*.i18n.yaml` records are not carried as hand edits:
 they are regenerated after a rebase (recipe step 3).

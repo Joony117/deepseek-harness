@@ -303,6 +303,20 @@ export interface SubagentRun {
 }
 
 /**
+ * Execution limits for a provider's local children. Each message the parent
+ * delivers restarts every limit, and time counts only while the child runs.
+ * Omitted fields are unbounded.
+ */
+export interface SubagentMessageLimits {
+  /** Most model steps the child may enter after one parent message. */
+  readonly maxSteps?: number
+  /** Running milliseconds the child may spend after one parent message. */
+  readonly deadlineMs?: number
+  /** Running milliseconds the child may go without starting a model step. */
+  readonly stallMs?: number
+}
+
+/**
  * One registered transport for running child agents. Providers are trusted
  * same-process implementations; callers treat descriptors and returned values
  * as borrowed immutable data. The service may call one provider concurrently
@@ -328,6 +342,14 @@ export interface SubagentProvider {
    * is detached immutable data and requires `agentOptions` support.
    */
   readonly agentRouteDefaults?: Readonly<{ provider: string; model: string }>
+  /**
+   * Optional limits for this provider's local children. The service reads them
+   * by provider name each time a child materializes, fresh or cold-resumed, so a
+   * resumed child whose provider is no longer registered runs without limits.
+   * A child that reaches a limit is stopped with `stopReason: 'error'` and a
+   * diagnostic naming the limit.
+   */
+  readonly messageLimits?: SubagentMessageLimits | undefined
   /**
    * Establish one external execution and return its owned handle.
    * The service has already validated that every requested start-time

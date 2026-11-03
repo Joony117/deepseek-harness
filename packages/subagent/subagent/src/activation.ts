@@ -10,6 +10,7 @@ import { epochFailureDiagnostic, epochStopReason } from './lifecycle.ts'
 import { limitSubagentDiagnostic } from './out-of-process.ts'
 import type { ActivationObserver } from './lifecycle.ts'
 import { SubagentError } from './error.ts'
+import type { MessageBudget } from './message-budget.ts'
 import type { StructuredAttachment } from './structured.ts'
 import type { SubagentResult, SubagentRun } from './types.ts'
 
@@ -85,6 +86,10 @@ export type ActivationResource =
     failureAt: SessionLogOffset | undefined
     /** Renewed when local settlement must recheck input or owned children. */
     poke: PromiseWithResolvers<void>
+    /** The provider's per-message limits, absent when it configures none. */
+    budget: MessageBudget | undefined
+    /** Diagnostic of the limit that stopped this Activation, once one has. */
+    limitStop: string | undefined
   }
   | {
     readonly kind: 'external'
@@ -157,8 +162,13 @@ export function captureLocalResult(activation: LocalActivation): SubagentResult 
   if (structured !== undefined) {
     const captured = structured.captured()
     if (captured !== undefined) return { output, stopReason, structured: captured.value }
-    if (stopReason === 'completed') return { output, stopReason: 'error' }
   }
+  // A limit stop is a failure whatever the cut-short turn recorded; the parent
+  // keeps any partial output. A structured value captured first still wins.
+  if (activation.limitStop !== undefined) {
+    return { output, stopReason: 'error', diagnostic: limitSubagentDiagnostic(activation.limitStop) }
+  }
+  if (structured !== undefined && stopReason === 'completed') return { output, stopReason: 'error' }
   // A child's model failure reaches the parent as its code, HTTP status and
   // message rather than a bare error stop reason.
   const failure = epochFailureDiagnostic(events)
