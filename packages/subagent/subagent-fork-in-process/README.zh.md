@@ -50,6 +50,9 @@ kind: "package-reference"
 | 字段 | 默认值 | 含义 |
 |---|---|---|
 | `providerName` | `fork` | 注册到 `ctx.subagents` 的提供方名称 |
+| `maxSteps` | 不限 | 每条父级消息之后子级最多可进入的模型步数；超出的那一步不会发出 |
+| `deadlineMs` | 不限 | 每条父级消息之后子级可运行的毫秒数；空闲时间不计 |
+| `stallMs` | 不限 | 子级未开始新模型步骤时可持续运行的毫秒数，工具调用内的时间也计入 |
 
 生成的[配置目录](../../../docs/config-catalog.zh.md#deepseek-aidsh-subagent-fork-in-process)是每个受支持字段及其 JSDoc 的穷尽式真源。
 
@@ -123,7 +126,7 @@ fork 会把保留的已完成历史复制到子 agent 的请求中，子 agent �
 
 #### 模型看到什么
 
-父级通过 `dsh-tool-subagent` 先收到子会话 ID，随后收到包含最终答案的完成通知。子级自行编写的消息通过 `send_message` 到达；继承的前缀与内部工作保留在子会话中。
+父级通过 `dsh-tool-subagent` 先收到子会话 ID，随后收到包含最终答案的完成通知。子级自行编写的消息通过 `send_message` 到达；继承的前缀与内部工作保留在子会话中。当配置的限制停止子级（连同其自身的子级）时，通知报告失败，并以诊断结尾，例如 `child stopped after its limit of 200 model steps`。
 
 #### Token 影响
 
@@ -143,6 +146,7 @@ fork 会把保留的已完成历史复制到子 agent 的请求中，子 agent �
 - **初始内容是一次性快照**——子 agent 只能看到 fork 时父级已完成的轮次，看不到父级此后记录的任何内容；不会实时共享上下文。
 - **前缀复用取决于请求输入是否匹配**——父级与子级的消息定义都逐字节相同；结构化输出、生成 SDK、路由变化或恢复的历史覆盖仍可破坏相等性。理由见[保持 fork 缓存的 Agent Note](../../../.agents/notes/implemented/architecture/2026-08-10-fork-children-stay-one-shot.zh.md)。
 - **随附 fork 工具不公开子级 LLM（大语言模型）路由选择**——它们继承父级提供方与模型，使复制的历史仍有资格复用 KV Cache。在某项改动能保留复用或公开有界重算成本前，路由选择保持禁用。
+- **限制随提供方名称生效**——冷恢复的子级从其记录名称对应的已注册提供方读取 `maxSteps`、`deadlineMs` 与 `stallMs`；该提供方不存在时，子级不受限制地运行。
 
 <a id="dev-note"></a>
 ### 开发备注
