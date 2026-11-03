@@ -40,8 +40,9 @@ import { SubagentRunId } from './types.ts'
 import type {
   ContinuableCreateRequest, ContinuableCreateSpec, SubagentInterruptAuthority,
   SubagentActivationSpec, SubagentActivation, SubagentMemberNames, SubagentStartRequest, SubagentRun,
-  SubagentSendMessageOptions, SubagentResult, SubagentRunInfo, ResolvedSubagentStartRequest,
+  SubagentSendMessageOptions, SubagentResult, SubagentRunInfo, ResolvedSubagentStartRequest, SubagentMessageLimits,
 } from './types.ts'
+import { MessageBudget } from './message-budget.ts'
 import { attachStructuredRuntime } from './structured.ts'
 import type { StructuredAttachment } from './structured.ts'
 import type { SubagentDelivery } from './control-types.ts'
@@ -67,6 +68,8 @@ interface SubagentHost {
   catalogOf(session: Session): readonly SubagentCatalogEntry[]
   /** Publish lifecycle events through the owning service's scoped dispatcher. */
   readonly emitLifecycle: LifecycleEmitter
+  /** Read one provider's per-message limits for a child materializing now. */
+  messageLimits(provider: string): SubagentMessageLimits | undefined
 }
 
 /** Inputs shared by fresh and resumed Activation materialization. */
@@ -751,6 +754,7 @@ export class SubagentManager {
   /** Close admission synchronously and share one release, including startup rollback. */
   private close(activation: Activation, release: () => Promise<void>): Promise<void> {
     if (activation.closing !== undefined) return activation.closing
+    if (activation.kind === 'local') activation.budget?.stop()
     const completion = Promise.withResolvers<void>()
     activation.closing = completion.promise
     void release().then(completion.resolve, completion.reject)
@@ -872,6 +876,8 @@ export class SubagentManager {
         failureAt: undefined,
         poke: Promise.withResolvers<void>(),
         omitClosingText: false,
+        budget: undefined,
+        limitStop: undefined,
       }
     }
     const childId = resource.kind === 'local' ? resource.handle.agent.id : resource.run.id
@@ -911,6 +917,7 @@ export class SubagentManager {
         activation.handle.agent.ctx.on('session/event', (_session, event) => {
           if (event.type === 'tool/call') activation.omitClosingText = false
         })
+        this.enforceMessageLimits(activation, provider)
       }
       // Listeners may read the resident Agent or drain it immediately. Publish
       // after residency and inbox listeners, as the last rollback-protected step.
@@ -1303,6 +1310,8 @@ export class SubagentManager {
     options.signal.throwIfAborted()
     options.authorize?.()
     this.assertAdmitting(parent)
+    // Recorded before delivery so a claim during delivery still restarts the budget.
+    if (activation.kind === 'local') activation.budget?.admitted(message.id)
     try {
       this.deliver(activation, message, options.delivery)
     } finally {
@@ -1310,6 +1319,45 @@ export class SubagentManager {
     }
     options.onAccepted?.()
     return message.id
+  }
+
+  /**
+   * Enforce one provider's per-message limits on a local Activation. They
+   * restart when a turn claims a message accepted through
+   * {@link submitAdmitted}; time counts only while the child runs. A limit reached first records its
+   * diagnostic and disposes the Activation, which also stops owned children;
+   * a stop already in progress keeps its own result.
+   * @param activation - the local Activation just published.
+   * @param provider - provider name whose configured limits apply.
+   */
+  private enforceMessageLimits(activation: LocalActivation, provider: string): void {
+    const limits = this.host.messageLimits(provider)
+    if (limits === undefined) return
+    const child = activation.handle.agent
+    const budget = new MessageBudget(limits, (diagnostic) => {
+      if (activation.closing !== undefined) return
+      activation.limitStop = diagnostic
+      // Never awaited: disposal waits for the driver that may be inside this
+      // Activation's own pre-step, so awaiting here would deadlock.
+      void this.dispose(activation).catch((error: unknown) => { this.reportTeardownFailure(activation, error) })
+    })
+    activation.budget = budget
+    child.ctx.on('agent/inbox/claimed', ({ agent, message }) => {
+      if (agent === child) budget.claimed(message.id)
+    })
+    child.ctx.on('agent/status', ({ agent, status }) => {
+      if (agent !== child) return
+      if (status === 'running') budget.running()
+      else budget.idle()
+    })
+    child.ctx.on('agent/pre-step', async ({ agent }, next) => {
+      if (agent !== child) return next()
+      budget.stepProposed()
+      const decision = await next()
+      // The step past the limit never reaches the model.
+      return decision.kind !== 'enter' || budget.stepEntered() ? decision : { kind: 'reject' }
+    })
+    if (child.status === 'running') budget.running()
   }
 
   /** Refuse image content for a child whose fixed model accepts text only. */

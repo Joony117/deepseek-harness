@@ -96,6 +96,7 @@ export type {
   ResolvedSubagentStartRequest,
   SubagentStopReason,
   SubagentStopReasonMap,
+  SubagentMessageLimits,
 } from './types.ts'
 export {
   foldSubagentDescriptor,
@@ -109,6 +110,7 @@ export type {
   SubagentDescriptorData,
 } from './descriptor.ts'
 export { STRUCTURED_OUTPUT_TOOL } from './structured.ts'
+export { messageLimitsFrom } from './message-budget.ts'
 export { SubagentError } from './error.ts'
 export { assertSubagentMaxDepth, delegationDepthOf } from './depth.ts'
 export {
@@ -222,6 +224,7 @@ export class SubagentRuntime extends TypertRemoteService {
         identityOf: session => identityProjection.stateOf(session).identity,
         catalogOf: session => subagentCatalogProjectionDefinition.wire.view(catalogProjection.stateOf(session)),
         emitLifecycle: this.emitLifecycle,
+        messageLimits: name => this.providers.get(name)?.messageLimits,
       }, () => this.config.maxActiveSubagents.get())
       this.manager = manager
       childCtx.effect(() => () => {

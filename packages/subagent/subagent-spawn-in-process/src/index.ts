@@ -11,8 +11,10 @@ import z from '@deepseek-ai/schemastery'
 import type {
   ContinuableCreateSpec,
   SubagentCapabilities,
+  SubagentMessageLimits,
   SubagentProvider,
 } from '@deepseek-ai/dsh-subagent'
+import { messageLimitsFrom } from '@deepseek-ai/dsh-subagent'
 
 export const name = 'subagent-spawn-in-process'
 // `tools` is deliberately not injected: the child factory already provides it during setup,
@@ -23,10 +25,22 @@ export const inject = ['subagents']
 export interface Config {
   /** Provider name on `ctx.subagents` (default `spawn`). */
   providerName: string
+  /** Most model steps one child may enter after each parent message; omit for no step cap. */
+  maxSteps?: number
+  /**
+   * Running milliseconds one child may spend after each parent message before it
+   * is stopped; idle time does not count. Omit for no deadline.
+   */
+  deadlineMs?: number
+  /** Running milliseconds one child may go without starting a model step before it is stopped; omit for no stall limit. */
+  stallMs?: number
 }
 
 export const Config: z<Config> = z.object({
   providerName: z.string().default('spawn'),
+  maxSteps: z.number().step(1).min(1).max(Number.MAX_SAFE_INTEGER),
+  deadlineMs: z.number().step(1).min(1).max(2 ** 31 - 1),
+  stallMs: z.number().step(1).min(1).max(2 ** 31 - 1),
 })
 
 /**
@@ -45,7 +59,7 @@ class SpawnInProcessProvider implements SubagentProvider {
   // Context contract: a spawned child starts fresh — it never sees the parent conversation.
   readonly inheritsParentContext = false
 
-  constructor(readonly name: string) {}
+  constructor(readonly name: string, readonly messageLimits: SubagentMessageLimits | undefined) {}
 
   prepareContinuable(): Promise<ContinuableCreateSpec> {
     // A spawned child starts fresh, so it contributes no seed; the continuation
@@ -55,5 +69,5 @@ class SpawnInProcessProvider implements SubagentProvider {
 }
 
 export function apply(ctx: Context, config: Config): void {
-  ctx.subagents.registerProvider(new SpawnInProcessProvider(config.providerName))
+  ctx.subagents.registerProvider(new SpawnInProcessProvider(config.providerName, messageLimitsFrom(config)))
 }
