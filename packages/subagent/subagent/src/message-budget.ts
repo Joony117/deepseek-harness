@@ -26,11 +26,12 @@ export function messageLimitsFrom(config: SubagentMessageLimits): SubagentMessag
  * the deadline, and the stall window restart when a turn claims a parent
  * message, so work still running for an earlier message never spends the next
  * message's budget, and messages from the child's own children never restart
- * it. Time is
- * counted only while the child runs: time idle waiting on owned children or
- * with a parked inbox neither stalls the child nor spends its deadline. The
- * first limit reached calls `onExceeded` once with the parent-visible
- * diagnostic; the budget is inert after that or after {@link stop}.
+ * it. Time is counted only while the child runs: time idle waiting on owned
+ * children or with a parked inbox neither stalls the child nor spends its
+ * deadline. While a cancellation someone else requested unwinds, no limit
+ * fires. The first limit reached calls `onExceeded` once with the
+ * parent-visible diagnostic, which also counts the accepted parent messages
+ * no turn claimed yet; the budget is inert after that or after {@link stop}.
  */
 export class MessageBudget {
   private steps = 0
@@ -39,6 +40,7 @@ export class MessageBudget {
   private deadlineTimer: ReturnType<typeof setTimeout> | undefined
   private stallTimer: ReturnType<typeof setTimeout> | undefined
   private done = false
+  private suspended = false
   private readonly parentMessages = new Set<MessageId>()
 
   /**
@@ -63,40 +65,46 @@ export class MessageBudget {
    * @param messageId - the claimed message.
    */
   claimed(messageId: MessageId): void {
-    if (this.parentMessages.delete(messageId)) this.restart()
-  }
-
-  private restart(): void {
-    if (this.done) return
+    if (!this.parentMessages.delete(messageId)) return
     this.steps = 0
     this.spentMs = 0
     if (this.runningSince === undefined) return
-    this.clearTimers()
     this.runningSince = performance.now()
     this.armDeadline()
     this.armStall()
+  }
+
+  /**
+   * The inbox dropped one message before any turn claimed it.
+   * @param messageId - the discarded message.
+   */
+  discarded(messageId: MessageId): void {
+    this.parentMessages.delete(messageId)
   }
 
   /** The child started running: resume the deadline and open a stall window. */
   running(): void {
-    if (this.done || this.runningSince !== undefined) return
+    if (this.done || this.suspended || this.runningSince !== undefined) return
     this.runningSince = performance.now()
     this.armDeadline()
     this.armStall()
   }
 
-  /** The child went idle: bank its running time and pause both timers. */
+  /** The child went idle: bank its running time, pause both timers, and end any suspension. */
   idle(): void {
-    if (this.runningSince === undefined) return
-    this.spentMs += performance.now() - this.runningSince
-    this.runningSince = undefined
-    this.clearTimers()
+    this.pause()
+    this.suspended = false
+  }
+
+  /** A cancellation of the running work began: no limit fires until the child is idle again. */
+  cancelled(): void {
+    this.pause()
+    this.suspended = true
   }
 
   /** A model step is being proposed: its start resets the stall window. */
   stepProposed(): void {
-    if (this.done || this.runningSince === undefined) return
-    this.armStall()
+    if (this.runningSince !== undefined) this.armStall()
   }
 
   /**
@@ -105,6 +113,7 @@ export class MessageBudget {
    */
   stepEntered(): boolean {
     if (this.done) return false
+    if (this.suspended) return true
     this.steps += 1
     const { maxSteps } = this.limits
     if (maxSteps === undefined || this.steps <= maxSteps) return true
@@ -117,6 +126,13 @@ export class MessageBudget {
     this.done = true
     this.runningSince = undefined
     this.parentMessages.clear()
+    this.clearTimers()
+  }
+
+  private pause(): void {
+    if (this.runningSince === undefined) return
+    this.spentMs += performance.now() - this.runningSince
+    this.runningSince = undefined
     this.clearTimers()
   }
 
@@ -145,9 +161,12 @@ export class MessageBudget {
     this.stallTimer = undefined
   }
 
-  private exceed(diagnostic: string): void {
-    if (this.done) return
+  /** Report the first limit reached; callers only reach this while live and unsuspended. */
+  private exceed(limit: string): void {
+    const unread = this.parentMessages.size
     this.stop()
-    this.onExceeded(diagnostic)
+    this.onExceeded(unread === 0
+      ? limit
+      : `${limit}; ${unread} queued message${unread === 1 ? ' was' : 's were'} discarded unread`)
   }
 }
