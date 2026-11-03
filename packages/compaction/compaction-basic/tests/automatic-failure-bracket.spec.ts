@@ -1,26 +1,15 @@
 /**
- * The synthetic automatic-failure bracket, checked against the real
- * `@deepseek-ai/dsh-compaction` invariant companion.
- *
- * The bracket this backend appends for an automatic compaction failure that
- * never reached the region transaction is a hand-built `compaction/start` /
- * `compaction/end` pair. The invariant is the written contract for that pair:
- * a numbered bracket must name the exact open turn, its close must name the
- * same owner, an error-carrying close needs no `compaction/summary`, and no
- * turn boundary may cross a bracket that is still open. This file mounts the
- * companion for real so a violation fails at the append site rather than
- * silently poisoning a session in a deployment that opts invariants in.
- *
- * Its name matches the manual-topology convention in `scripts/test-invariants.ts`,
- * so this suite owns its own service tree.
+ * The synthetic automatic-failure bracket this backend appends for an automatic
+ * compaction failure that never reached the region transaction: a hand-built
+ * `compaction/start` / `compaction/end` pair. The pair must name the exact
+ * open turn, its close must name the same compaction, an error-carrying close
+ * has no `compaction/summary`, and no turn boundary may fall inside it.
  */
 
 import { describe, expect, it, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import SessionStore from '@deepseek-ai/dsh-session'
 import type { Session } from '@deepseek-ai/dsh-session'
-import InvariantRegistry from '@deepseek-ai/dsh-invariants'
-import * as CompactionInvariant from '@deepseek-ai/dsh-compaction/invariant'
 import LlmRuntime, { createMessage, createUserMessage, LlmAdapter } from '@deepseek-ai/dsh-llm'
 import type { StreamChunk } from '@deepseek-ai/dsh-llm'
 import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
@@ -41,8 +30,6 @@ class CapacitylessAdapter extends LlmAdapter {
 async function setup(): Promise<Context> {
   const ctx = new Context()
   await ctx.plugin(SessionStore)
-  await ctx.plugin(InvariantRegistry, { enabled: true })
-  await ctx.plugin(CompactionInvariant)
   await ctx.plugin(LlmRuntime)
   await ctx.plugin(SessionProjectionRegistry)
   void new TokenMeter(ctx)
@@ -84,12 +71,11 @@ function conversation(ctx: Context, turns = 4): Session {
   return session
 }
 
-describe('automatic compaction failure bracket under the compaction invariant', () => {
-  it('appends a bracket the invariant accepts and leaves no open compaction behind', async () => {
+describe('automatic compaction failure bracket', () => {
+  it('appends one closed bracket for the open turn and leaves no open compaction behind', async () => {
     const ctx = await setup()
-    // `recordAutomaticFailure` swallows an append the invariant rejects into
-    // exactly one warning, so capturing warnings is what makes a rejection
-    // visible here instead of looking like "nothing was recorded".
+    // `recordAutomaticFailure` swallows a failed append into exactly one
+    // warning, so capturing warnings makes a rejection visible here.
     const warnings: string[] = []
     ctx.logger.warn = ((message: string) => { warnings.push(message) }) as typeof ctx.logger.warn
     // Fail the route lookup: pressure resolution fails before
@@ -100,9 +86,6 @@ describe('automatic compaction failure bracket under the compaction invariant', 
     const session = conversation(ctx)
     const owner = { session, options: { provider: MODEL, model: MODEL } } as Agent
 
-    // Every append below runs through the mounted invariant. It does NOT
-    // surface here: the reporter catches its own append failure by design, so
-    // the warning assertion two lines down is what reads the verdict.
     await expect(agentEvents(ctx, owner).waterfall(
       'agent/pre-step', { messages: [], turn: 5, step: 1, signal: SIGNAL },
       () => Promise.resolve({ kind: 'enter' as const, messages: [] }),
@@ -111,15 +94,20 @@ describe('automatic compaction failure bracket under the compaction invariant', 
     expect(warnings.filter(message => message.includes('could not record'))).toEqual([])
 
     const events = session.snapshotEvents()
-    const start = events.find(event => event.type === 'compaction/start')
-    const end = events.find(event => event.type === 'compaction/end')
-    expect(start?.data.turn).toBe(5)
-    expect(end?.data.turn).toBe(5)
-    expect(end?.data.error).toContain('model route unavailable')
+    const starts = events.filter(event => event.type === 'compaction/start')
+    const ends = events.filter(event => event.type === 'compaction/end')
+    expect(starts).toHaveLength(1)
+    expect(ends).toHaveLength(1)
+    const [start] = starts
+    const [end] = ends
+    expect(start!.data.turn).toBe(5)
+    expect(end!.data).toMatchObject({ compactionId: start!.data.compactionId, turn: 5 })
+    expect(end!.data.error).toContain('model route unavailable')
+    expect(events.some(event => event.type === 'compaction/summary')).toBe(false)
+    // The clause the pre-rc.1 patch violated: no turn boundary inside the bracket.
+    const inside = events.slice(events.indexOf(start!) + 1, events.indexOf(end!))
+    expect(inside.filter(event => event.type === 'turn/start' || event.type === 'turn/end')).toEqual([])
 
-    // The clause the pre-rc.1 patch violated: a turn boundary may not cross an
-    // open bracket, so a session carrying an orphaned start poisons its own
-    // next turn/end. The recorded pair is closed, so this append succeeds.
     expect(() => session.append('turn/end', { turn: 5, reason: { kind: 'completed' } })).not.toThrow()
     expect(() => session.append('turn/start', { turn: 6 })).not.toThrow()
   })
