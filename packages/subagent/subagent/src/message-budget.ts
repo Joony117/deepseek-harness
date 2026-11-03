@@ -31,7 +31,8 @@ export function messageLimitsFrom(config: SubagentMessageLimits): SubagentMessag
  * deadline. While a cancellation someone else requested unwinds, no limit
  * fires. The first limit reached calls `onExceeded` once with the
  * parent-visible diagnostic, which also counts the accepted parent messages
- * no turn claimed yet; the budget is inert after that or after {@link stop}.
+ * still pending in the inbox; the budget is inert after that or after
+ * {@link stop}.
  */
 export class MessageBudget {
   private steps = 0
@@ -46,10 +47,12 @@ export class MessageBudget {
   /**
    * @param limits - the provider's configured limits.
    * @param onExceeded - called once with the diagnostic of the first limit reached.
+   * @param isPending - whether a message is still waiting in the child's inbox.
    */
   constructor(
     private readonly limits: SubagentMessageLimits,
     private readonly onExceeded: (diagnostic: string) => void,
+    private readonly isPending: (messageId: MessageId) => boolean,
   ) {}
 
   /**
@@ -72,14 +75,6 @@ export class MessageBudget {
     this.runningSince = performance.now()
     this.armDeadline()
     this.armStall()
-  }
-
-  /**
-   * The inbox dropped one message before any turn claimed it.
-   * @param messageId - the discarded message.
-   */
-  discarded(messageId: MessageId): void {
-    this.parentMessages.delete(messageId)
   }
 
   /** The child started running: resume the deadline and open a stall window. */
@@ -163,7 +158,9 @@ export class MessageBudget {
 
   /** Report the first limit reached; callers only reach this while live and unsuspended. */
   private exceed(limit: string): void {
-    const unread = this.parentMessages.size
+    // Read from the live inbox: an edited or re-steered message keeps its id,
+    // and a delivery that threw never reached it.
+    const unread = [...this.parentMessages].filter(this.isPending).length
     this.stop()
     this.onExceeded(unread === 0
       ? limit

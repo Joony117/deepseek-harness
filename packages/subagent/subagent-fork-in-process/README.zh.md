@@ -126,7 +126,7 @@ fork 会把保留的已完成历史复制到子 agent 的请求中，子 agent �
 
 #### 模型看到什么
 
-父级通过 `dsh-tool-subagent` 先收到子会话 ID，随后收到包含最终答案的完成通知。子级自行编写的消息通过 `send_message` 到达；继承的前缀与内部工作保留在子会话中。当配置的限制停止子级（连同其自身的子级）时，通知报告失败，并以诊断结尾，例如 `child stopped after its limit of 200 model steps`。
+父级通过 `dsh-tool-subagent` 先收到子会话 ID，随后收到包含最终答案的完成通知。子级自行编写的消息通过 `send_message` 到达；继承的前缀与内部工作保留在子会话中。当配置的限制停止子级（连同其自身的子级）时，通知报告失败，并以诊断结尾，例如 `child stopped after its limit of 200 model steps`；仍在为子级排队的父级消息会被丢弃，诊断末尾注明丢弃数量，例如 `; 1 queued message was discarded unread`，以便父级重新发送。
 
 #### Token 影响
 
