@@ -12,9 +12,10 @@ function nextMessage(b: MessageBudget): void {
   b.claimed(id)
 }
 
-function budget(limits: SubagentMessageLimits) {
+/** A budget whose inbox still holds every message except those in `gone`. */
+function budget(limits: SubagentMessageLimits, gone: ReadonlySet<string> = new Set()) {
   const exceeded = vi.fn<(diagnostic: string) => void>()
-  return { budget: new MessageBudget(limits, exceeded), exceeded }
+  return { budget: new MessageBudget(limits, exceeded, id => !gone.has(id)), exceeded }
 }
 
 describe('MessageBudget', () => {
@@ -201,14 +202,18 @@ describe('MessageBudget', () => {
       )
     })
 
-    it('does not count messages the inbox already discarded', () => {
-      const { budget: b, exceeded } = budget({ maxSteps: 1 })
+    it('counts only messages still pending in the inbox', () => {
+      // `withdrawn` left the inbox; `rejected` was recorded but its delivery threw.
+      const { budget: b, exceeded } = budget({ maxSteps: 1 }, new Set(['withdrawn', 'rejected']))
       b.running()
       b.admitted('withdrawn' as MessageId)
-      b.discarded('withdrawn' as MessageId)
+      b.admitted('rejected' as MessageId)
+      b.admitted('queued' as MessageId)
       b.stepEntered()
       b.stepEntered()
-      expect(exceeded).toHaveBeenCalledExactlyOnceWith('child stopped after its limit of 1 model steps')
+      expect(exceeded).toHaveBeenCalledExactlyOnceWith(
+        'child stopped after its limit of 1 model steps; 1 queued message was discarded unread',
+      )
     })
 
     it('restarts the budget for a parent message claimed while the child is idle', () => {

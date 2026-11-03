@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
 import { liveConfig } from '../../../settings/settings/tests/live-config.ts'
-import type { Agent } from '@deepseek-ai/dsh-agent'
+import type { Agent, PreStepDecision } from '@deepseek-ai/dsh-agent'
 import { agentEvents } from '@deepseek-ai/dsh-agent'
 import AgentLoop from '@deepseek-ai/dsh-agent-loop'
 import { mountAgentLoopTestDependencies } from '@deepseek-ai/dsh-agent-loop-testkit'
@@ -4404,7 +4404,7 @@ describe('per-message limits', () => {
     }
   })
 
-  it('tells the parent how many queued messages a limit stop discarded unread', async () => {
+  it.each(['queue', 'steer'] as const)('tells the parent how many pending messages a limit stop discarded unread (%s)', async (delivery) => {
     const { ctx, parent, adapter } = await bounded([
       toolCallResponse('t1', 'stubborn', {}),
       textResponse('never requested'),
@@ -4412,7 +4412,8 @@ describe('per-message limits', () => {
     const started = await ctx.subagents.startActivation({ ...startSpec(parent, 'bounded'), delivery: 'caller' })
     try {
       await vi.waitFor(() => { expect(requestsFor(adapter, started.childId)).toHaveLength(1) })
-      await queuePrompt(ctx, parent, started.childId, message('second task'))
+      // A queued message waits for the next turn; a steered one for the next step.
+      await humanPrompt(ctx, parent, started.childId, 'second task', delivery)
       await expect(started.result).resolves.toMatchObject({
         stopReason: 'error',
         diagnostic: 'child stopped at its 100ms deadline; 1 queued message was discarded unread',
@@ -4448,6 +4449,75 @@ describe('per-message limits', () => {
       await started.dispose()
       await ctx.fiber.dispose()
     }
+  })
+
+  it.each([
+    ['maxSteps, work registered at boot', false, { maxSteps: 1 }, 0],
+    ['maxSteps, work prepended after the child started', true, { maxSteps: 1 }, 0],
+    // The work keeps unwinding past the stall window after the abort.
+    ['stallMs, work registered at boot', false, { stallMs: 1_000 }, 1_300],
+  ] as const)('keeps an interrupt aborted when it lands during another plugin\'s pending pre-step work (%s)', async (_label, outermost, limits, unwindMs) => {
+    const releaseFirst = Promise.withResolvers<undefined>()
+    const adapter = new GatedAdapter([
+      { chunks: textResponse('one'), gate: releaseFirst.promise },
+      { chunks: textResponse('never requested') },
+    ])
+    const { ctx, parent } = await boundedWith(adapter, limits)
+    parkParent(ctx, parent)
+    const ends: SubagentRunEndInfo[] = []
+    ctx.on('subagent/end', (info) => { ends.push(info) })
+    let hold = false
+    const secondStep = Promise.withResolvers<undefined>()
+    // Like pressure compaction: slow pre-step work that still delegates after an abort.
+    const slow = async ({ agent, signal }: { agent: Agent; signal: AbortSignal }, next: () => Promise<PreStepDecision>) => {
+      if (!hold || agent.session.header.parentSession !== parent.id) return next()
+      hold = false
+      secondStep.resolve(undefined)
+      await new Promise((resolve) => { signal.addEventListener('abort', resolve, { once: true }) })
+      await new Promise((resolve) => { setTimeout(resolve, unwindMs) })
+      return next()
+    }
+    if (!outermost) ctx.on('agent/pre-step', slow)
+    const started = await ctx.subagents.startActivation({ ...startSpec(parent, 'bounded'), delivery: 'parent' })
+    // Registered after the limits, so it runs before them and the abort precedes their first look.
+    if (outermost) ctx.on('agent/pre-step', slow, { prepend: true })
+    await vi.waitFor(() => { expect(requestsFor(adapter, started.childId)).toHaveLength(1) })
+    // Not a parent message, so with maxSteps its turn starts with the one-step budget already spent.
+    hold = true
+    ctx.agents.get(started.childId)!.followup(createUserMessage({ source: { kind: 'user' }, content: message('more') }))
+    releaseFirst.resolve(undefined)
+    await secondStep.promise
+    ctx.subagents.interrupt(started.childId, { kind: 'user', parentSessionId: parent.id })
+    await waitNoActivation(ctx, started.childId)
+    await vi.waitFor(() => { expect(ends).toHaveLength(1) })
+    expect(ends[0]!.stopReason).toBe('aborted')
+    expect(requestsFor(adapter, started.childId)).toHaveLength(1)
+  })
+
+  it('still gives a queued parent message edited in place its own budget', async () => {
+    const releaseFirst = Promise.withResolvers<undefined>()
+    const adapter = new GatedAdapter([
+      { chunks: toolCallResponse('a1', 'noop', {}), gate: releaseFirst.promise },
+      { chunks: textResponse('first done') },
+      { chunks: toolCallResponse('b1', 'noop', {}) },
+      { chunks: textResponse('second done') },
+    ])
+    const { ctx, parent } = await boundedWith(adapter, { maxSteps: 2 })
+    parkParent(ctx, parent)
+    const ends: SubagentRunEndInfo[] = []
+    ctx.on('subagent/end', (info) => { ends.push(info) })
+    const started = await ctx.subagents.startActivation({ ...startSpec(parent, 'bounded'), delivery: 'parent' })
+    await vi.waitFor(() => { expect(adapter.requests).toHaveLength(1) })
+    const queuedId = await queuePrompt(ctx, parent, started.childId, message('second task'))
+    const child = ctx.agents.get(started.childId)!
+    const queued = child.inbox.nextTurn.find(item => item.id === queuedId)!
+    // Editing a queued item re-inserts it under the same id.
+    expect(child.inbox.replace(queuedId, { ...queued, content: message('second task, edited') })).toBe(true)
+    releaseFirst.resolve(undefined)
+    await waitNoActivation(ctx, started.childId)
+    await vi.waitFor(() => { expect(ends).toHaveLength(1) })
+    expect(ends[0]!.stopReason).toBe('completed')
+    expect(requestsFor(adapter, started.childId)).toHaveLength(4)
   })
 
   it('runs a provider without configured limits unbounded', async () => {

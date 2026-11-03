@@ -1336,6 +1336,9 @@ export class SubagentManager {
     const limits = this.host.messageLimits(provider)
     if (limits === undefined) return
     const child = activation.handle.agent
+    const pending = (messageId: MessageId): boolean =>
+      child.inbox.nextTurn.some(message => message.id === messageId)
+      || child.inbox.nextStep.some(message => message.id === messageId)
     const budget = new MessageBudget(limits, (diagnostic) => {
       activation.limitStop = diagnostic
       // Never awaited: disposal waits for the driver that may be inside this
@@ -1344,7 +1347,7 @@ export class SubagentManager {
         /* v8 ignore next -- the settlement observer already reports teardown failures; this only keeps the rejection handled. */
         (error: unknown) => { this.reportTeardownFailure(activation, error) },
       )
-    })
+    }, pending)
     activation.budget = budget
     // Agent-scoped listeners can still receive another agent's events (e.g. the
     // parent's agent/error), so each one checks its subject.
@@ -1352,25 +1355,29 @@ export class SubagentManager {
       /* v8 ignore else -- defensive subject check; only agent/error has been seen to cross agents. */
       if (agent === child) budget.claimed(message.id)
     })
-    child.ctx.on('agent/inbox/discarded', ({ agent, message }) => {
-      /* v8 ignore else -- defensive subject check; only agent/error has been seen to cross agents. */
-      if (agent === child) budget.discarded(message.id)
-    })
     child.ctx.on('agent/status', ({ agent, status }) => {
       /* v8 ignore next -- defensive subject check; only agent/error has been seen to cross agents. */
       if (agent !== child) return
       if (status === 'running') budget.running()
       else budget.idle()
     })
+    // Each turn has its own signal; whoever cancels it, the limits wait for idle.
+    // Watched from the outermost pre-step listener, so an abort that lands while
+    // another plugin's pre-step work is pending is still seen, even if that
+    // plugin then delegates the aborted step inward.
     const watched = new WeakSet<AbortSignal>()
-    child.ctx.on('agent/pre-step', async ({ agent, signal }, next) => {
+    child.ctx.on('agent/pre-step', ({ agent, signal }, next) => {
+      /* v8 ignore else -- defensive subject check; only agent/error has been seen to cross agents. */
+      if (agent === child && !watched.has(signal)) {
+        watched.add(signal)
+        if (signal.aborted) budget.cancelled()
+        else signal.addEventListener('abort', () => { budget.cancelled() }, { once: true })
+      }
+      return next()
+    }, { prepend: true })
+    child.ctx.on('agent/pre-step', async ({ agent }, next) => {
       /* v8 ignore next -- defensive subject check; only agent/error has been seen to cross agents. */
       if (agent !== child) return next()
-      if (!watched.has(signal)) {
-        // One signal per activity: whoever cancels it, the limits wait for idle.
-        watched.add(signal)
-        signal.addEventListener('abort', () => { budget.cancelled() }, { once: true })
-      }
       budget.stepProposed()
       const decision = await next()
       // The step past the limit never reaches the model.

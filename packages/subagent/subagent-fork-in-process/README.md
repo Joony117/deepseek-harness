@@ -126,7 +126,7 @@ The child may reuse the inherited byte-identical prefix under the same provider 
 
 #### What the model sees
 
-Through `dsh-tool-subagent`, the parent first receives the child's name, then a completion notice with its final answer. Child-authored messages arrive through `send_message`; the inherited prefix and internal work remain in the child session. When a configured limit stops the child, together with its own children, the notice reports a failure and ends with a diagnostic such as `child stopped after its limit of 200 model steps`.
+Through `dsh-tool-subagent`, the parent first receives the child's name, then a completion notice with its final answer. Child-authored messages arrive through `send_message`; the inherited prefix and internal work remain in the child session. When a configured limit stops the child, together with its own children, the notice reports a failure and ends with a diagnostic such as `child stopped after its limit of 200 model steps`; parent messages still queued for the child are discarded, and the diagnostic ends with how many, e.g. `; 1 queued message was discarded unread`, so the parent can resend them.
 
 #### Token effect
 
