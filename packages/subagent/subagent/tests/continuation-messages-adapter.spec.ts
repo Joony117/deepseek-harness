@@ -84,13 +84,15 @@ it('continues the parent through default Messages after a reasoning-bearing cont
       { type: 'text', text: 'child answer' },
     ]
     expect(notice?.content).toEqual(closingContent)
+    // The notice opens this parent's first turn, so the fork's fresh-session
+    // ordering puts the runtime-context snapshot ahead of it.
     const noticeWithContext = [
-      ...closingContent,
       {
         type: 'text',
         text: 'Current runtime context. This snapshot supersedes earlier runtime-context snapshots.\n\n'
           + `Current working directory: ${JSON.stringify(process.cwd())}.`,
       },
+      ...closingContent,
     ]
     expect(requests[1]?.body).toMatchObject({ messages: [{ role: 'user', content: noticeWithContext }] })
 
