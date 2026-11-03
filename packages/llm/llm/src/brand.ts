@@ -45,6 +45,11 @@ export function ToolCallId(id: string): ToolCallId {
  * {@link ToolCallId}; both constructors are the same zero-cost brand.
  */
 export type CallId = ToolCallId
+/**
+ * Backward-compatible constructor alias of {@link ToolCallId}.
+ * @param id - provider tool-call id string.
+ * @returns the same string with the tool-call-id brand.
+ */
 export const CallId = ToolCallId
 
 /** Provider-issued request identifier retained for diagnostics across package boundaries. */
