@@ -27,7 +27,7 @@ const utf8Decoder = new TextDecoder()
  * @param diagnostic - safe diagnostic text produced by the provider.
  * @returns the original text, or a visibly truncated value within the limit.
  */
-function limitSubagentDiagnostic(diagnostic: string): string {
+export function limitSubagentDiagnostic(diagnostic: string): string {
   const bytes = utf8Encoder.encode(diagnostic)
   if (bytes.byteLength <= MAX_SUBAGENT_DIAGNOSTIC_BYTES) return diagnostic
 

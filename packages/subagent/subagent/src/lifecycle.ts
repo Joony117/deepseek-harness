@@ -116,6 +116,19 @@ export function createActivationObserver(
 }
 
 /**
+ * Describe the model failure that ended an epoch's last turn, for the parent's settlement notice.
+ * The caller bounds its byte size.
+ * @param events - the epoch's committed Session events.
+ * @returns `code (HTTP status): message` when the last turn ended in a model failure, else undefined.
+ */
+export function epochFailureDiagnostic(events: readonly SessionEvent[]): string | undefined {
+  const reason = foldConsumedWork(events).end?.data.reason
+  if (reason?.kind !== 'error') return undefined
+  const { code, status, message } = reason.error
+  return `${code}${status === undefined ? '' : ` (HTTP ${status})`}: ${message}`
+}
+
+/**
  * Why this child's epoch ended, for the terminal lifecycle edge and the
  * manager's own parent delivery. The child's own log is authoritative:
  * teardown succeeding says nothing about whether the model errored, hit its

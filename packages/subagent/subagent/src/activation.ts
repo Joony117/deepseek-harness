@@ -6,7 +6,8 @@ import type { Agent, AgentHandle } from '@deepseek-ai/dsh-agent'
 import type { SessionId, SessionLogOffset } from '@deepseek-ai/dsh-session'
 import { assertNever } from '@deepseek-ai/dsh-util-values'
 import { finalAssistantOutput } from './assistant-output.ts'
-import { epochStopReason } from './lifecycle.ts'
+import { epochFailureDiagnostic, epochStopReason } from './lifecycle.ts'
+import { limitSubagentDiagnostic } from './out-of-process.ts'
 import type { ActivationObserver } from './lifecycle.ts'
 import { SubagentError } from './error.ts'
 import type { StructuredAttachment } from './structured.ts'
@@ -158,7 +159,10 @@ export function captureLocalResult(activation: LocalActivation): SubagentResult 
     if (captured !== undefined) return { output, stopReason, structured: captured.value }
     if (stopReason === 'completed') return { output, stopReason: 'error' }
   }
-  return { output, stopReason }
+  // A child's model failure reaches the parent as its code, HTTP status and
+  // message rather than a bare error stop reason.
+  const failure = epochFailureDiagnostic(events)
+  return failure === undefined ? { output, stopReason } : { output, stopReason, diagnostic: limitSubagentDiagnostic(failure) }
 }
 
 /** Serialize each durable child's delivery, release, and disposal. */
