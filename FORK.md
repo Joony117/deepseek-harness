@@ -8,9 +8,9 @@ earlier moves (rc.1 cutover, rc.3 rebase, review rounds) lives in the tracker
 | Fact | Value |
 |---|---|
 | Working branch | `codex/harness` — all local work lives here |
-| Fork base | tag `dsh-v0.2.0-rc.2` (`639ed015397290b3745d163aafe02ffee4aa3f84`) |
-| Previous base | tag `dsh-v0.1.5-rc.3` (`a4c74a91e06b00fe0b0937bde982170c526cc842`), branch `codex/harness-0.1.5-rc.3` (`11b710e70b`) |
-| Rollback | branch `codex/harness-0.1.5-rc.3` + the pre-swap `~/.dsh` robocopy backup under `E:\staging-lq-1bvo\backups\` |
+| Fork base | tag `dsh-v0.2.1-rc.5` (`b830ec950faba0a46dda564be3e2d854afed94f1`) |
+| Previous base | tag `dsh-v0.2.0-rc.2` (`639ed015397290b3745d163aafe02ffee4aa3f84`), branch `codex/harness-0.2.0-rc.2` (`0cf41bd1cf`) |
+| Rollback | branch `codex/harness-0.2.0-rc.2` + the pre-swap `~/.dsh` robocopy backup taken at the rc.5 swap (step 6.2) |
 | Upstream default branch | `master` (**not** `main`) |
 | `origin` | `https://github.com/deepseek-ai/deepseek-harness.git` — upstream; push URL locally set to `DISABLED-push-to-upstream-forbidden` |
 | `fork` | `https://github.com/Joony117/deepseek-harness.git` — the owner's personal fork; the only push target |
@@ -35,12 +35,12 @@ earlier moves (rc.1 cutover, rc.3 rebase, review rounds) lives in the tracker
 7. **No fork banner in `AGENTS.md`.** Upstream sizes it to its ceiling; W's `CLAUDE.md`
    already points readers here.
 
-## What the fork carries (over `dsh-v0.2.0-rc.2`)
+## What the fork carries (over `dsh-v0.2.1-rc.5`)
 
 | Commit | What |
 |---|---|
 | (a) session delete | `delete` on the persistence seam (JSONL backend), the session-controller `@Remote('delete')`, client `ISessions.delete`, specs |
-| (a2) delete UI | one `sidebar.workspaces.session.menu.item` (id `delete`, order 450; plugin rows start at 500) + a `shell.overlay` confirm dialog; drop this commit alone to ship delete as API only |
+| (a2) delete UI | one `sidebar.workspaces.session.menu.item` (id `delete`, order 475, after upstream's `session-id` row at 450; plugin rows start at 500) + a `shell.overlay` confirm dialog; drop this commit alone to ship delete as API only |
 | (a3, a4) delete fixtures | rc.2 test fakes gain `delete`; upstream menu tests count the delete row |
 | (b) compaction | a failed automatic compaction is recorded; the summarizer runs with thinking off. (b2) keeps upstream's rule: a pressure config error is warned, not recorded |
 | (c) CallId alias | `packages/llm/llm/src/brand.ts` |
@@ -49,6 +49,12 @@ earlier moves (rc.1 cutover, rc.3 rebase, review rounds) lives in the tracker
 | (h) retired plugin source | `ToolRunContext.deferContext` rewrites a 0.1.x `{ kind: 'plugin', plugin }` source to `{ kind: 'plugin:<name>' }`, other fields kept, as the v3→v4 migration names an unknown producer (v4 persistence refuses `plugin`; dsh-plugin-subscriptions' image_generate) |
 | (i) icon alias | ui-primitives exports `IconSparkle16 = IconSparkleRegular` for dsh-plugin-subscriptions' client half (else boot-client "did not activate"); the upstream icon-set test skips the alias |
 | (e) this file | |
+
+**Held back at the rc.5 rebase.** Upstream removed `subagent-in-process-driver` (3d852a1cea, unified
+activation lifecycles), so the in-process child budgets `maxSteps`, `deadlineMs` and `stallMs`
+(fbb3bd493f, a0e5acc38b, a9485fac09 on the rc.2 branch) are not carried: continuable children
+need per-epoch vs per-lifecycle semantics decided first. Spawn/fork configs that still set these
+keys load without error at rc.5 (non-strict schema) and the budgets have no effect. The same commit's child failure diagnostic and goal job wait are carried.
 
 Generated catalogs, docs graphs and `*.i18n.yaml` records are not carried as hand edits:
 they are regenerated after a rebase (recipe step 3).
@@ -95,6 +101,7 @@ git -C $S/harness rebase --onto <new-tag> <old-tag> codex/harness
 ```sh
 corepack pnpm install --frozen-lockfile
 corepack pnpm run gen-cordis-catalog && corepack pnpm run gen-doc-graphs && corepack pnpm run gen-config-catalog
+corepack pnpm run gen-persistence-catalog
 corepack pnpm run gen-client-catalog && corepack pnpm run gen-cordis-api
 npx tsx scripts/verify-translation-pairing.ts --list    # then --write <pairs> for the pairs the fork changed
 corepack pnpm run typecheck && corepack pnpm run build
@@ -171,6 +178,9 @@ build in the step 4 order, restore W's `.prev` files. Turns written after the sw
 undo Windows ACL grants made on workspaces by the sandbox; account for them separately.
 
 ## Known failures at the base (not regressions)
+
+**No rc.5 baseline yet.** The list below was measured on rc.2; it is not an allowlist for an
+rc.5 fork run until three pristine `dsh-v0.2.1-rc.5` runs replace it.
 
 **rc.2 baseline**, measured 2026-09-30 (lq-1bvo P2): pristine `dsh-v0.2.0-rc.2`
 (639ed01539), three full `pnpm run test` runs, `DSH_COVERAGE_TEST_TIMEOUT_MS` unset,
