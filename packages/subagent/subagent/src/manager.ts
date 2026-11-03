@@ -1324,9 +1324,11 @@ export class SubagentManager {
   /**
    * Enforce one provider's per-message limits on a local Activation. They
    * restart when a turn claims a message accepted through
-   * {@link submitAdmitted}; time counts only while the child runs. A limit reached first records its
-   * diagnostic and disposes the Activation, which also stops owned children;
-   * a stop already in progress keeps its own result.
+   * {@link submitAdmitted}; time counts only while the child runs, and no limit
+   * fires while a cancellation someone else requested (interrupt, archive)
+   * unwinds. A limit reached first records its diagnostic and disposes the
+   * Activation, which also stops owned children; {@link close} disarms the
+   * budget, so a stop already in progress keeps its own result.
    * @param activation - the local Activation just published.
    * @param provider - provider name whose configured limits apply.
    */
@@ -1335,29 +1337,45 @@ export class SubagentManager {
     if (limits === undefined) return
     const child = activation.handle.agent
     const budget = new MessageBudget(limits, (diagnostic) => {
-      if (activation.closing !== undefined) return
       activation.limitStop = diagnostic
       // Never awaited: disposal waits for the driver that may be inside this
       // Activation's own pre-step, so awaiting here would deadlock.
-      void this.dispose(activation).catch((error: unknown) => { this.reportTeardownFailure(activation, error) })
+      void this.dispose(activation).catch(
+        /* v8 ignore next -- the settlement observer already reports teardown failures; this only keeps the rejection handled. */
+        (error: unknown) => { this.reportTeardownFailure(activation, error) },
+      )
     })
     activation.budget = budget
+    // Agent-scoped listeners can still receive another agent's events (e.g. the
+    // parent's agent/error), so each one checks its subject.
     child.ctx.on('agent/inbox/claimed', ({ agent, message }) => {
+      /* v8 ignore else -- defensive subject check; only agent/error has been seen to cross agents. */
       if (agent === child) budget.claimed(message.id)
     })
+    child.ctx.on('agent/inbox/discarded', ({ agent, message }) => {
+      /* v8 ignore else -- defensive subject check; only agent/error has been seen to cross agents. */
+      if (agent === child) budget.discarded(message.id)
+    })
     child.ctx.on('agent/status', ({ agent, status }) => {
+      /* v8 ignore next -- defensive subject check; only agent/error has been seen to cross agents. */
       if (agent !== child) return
       if (status === 'running') budget.running()
       else budget.idle()
     })
-    child.ctx.on('agent/pre-step', async ({ agent }, next) => {
+    const watched = new WeakSet<AbortSignal>()
+    child.ctx.on('agent/pre-step', async ({ agent, signal }, next) => {
+      /* v8 ignore next -- defensive subject check; only agent/error has been seen to cross agents. */
       if (agent !== child) return next()
+      if (!watched.has(signal)) {
+        // One signal per activity: whoever cancels it, the limits wait for idle.
+        watched.add(signal)
+        signal.addEventListener('abort', () => { budget.cancelled() }, { once: true })
+      }
       budget.stepProposed()
       const decision = await next()
       // The step past the limit never reaches the model.
       return decision.kind !== 'enter' || budget.stepEntered() ? decision : { kind: 'reject' }
     })
-    if (child.status === 'running') budget.running()
   }
 
   /** Refuse image content for a child whose fixed model accepts text only. */

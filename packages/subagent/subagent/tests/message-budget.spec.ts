@@ -150,6 +150,87 @@ describe('MessageBudget', () => {
     })
   })
 
+  describe('cancellation', () => {
+    it('fires no limit while a cancellation unwinds, then resumes once the child is idle', () => {
+      const { budget: b, exceeded } = budget({ maxSteps: 1, deadlineMs: 100, stallMs: 100 })
+      b.running()
+      vi.advanceTimersByTime(50)
+      b.cancelled()
+      // The aborted work may outlive every limit, and steps it still enters are not counted.
+      vi.advanceTimersByTime(10_000)
+      b.running()
+      expect([b.stepEntered(), b.stepEntered()]).toEqual([true, true])
+      expect(exceeded).not.toHaveBeenCalled()
+      b.idle()
+      // The deadline resumes from the 50ms spent before the cancellation.
+      b.running()
+      vi.advanceTimersByTime(49)
+      expect(exceeded).not.toHaveBeenCalled()
+      vi.advanceTimersByTime(1)
+      expect(exceeded).toHaveBeenCalledExactlyOnceWith('child stopped at its 100ms deadline')
+    })
+
+    it('ignores a cancellation that reaches an idle child', () => {
+      const { budget: b, exceeded } = budget({ deadlineMs: 100 })
+      b.cancelled()
+      b.idle()
+      b.running()
+      vi.advanceTimersByTime(100)
+      expect(exceeded).toHaveBeenCalledOnce()
+    })
+  })
+
+  describe('queued parent messages', () => {
+    it('counts accepted parent messages no turn claimed yet in the diagnostic', () => {
+      const one = budget({ maxSteps: 1 })
+      one.budget.running()
+      one.budget.admitted('queued-1' as MessageId)
+      one.budget.stepEntered()
+      one.budget.stepEntered()
+      expect(one.exceeded).toHaveBeenCalledExactlyOnceWith(
+        'child stopped after its limit of 1 model steps; 1 queued message was discarded unread',
+      )
+
+      const two = budget({ stallMs: 10 })
+      two.budget.running()
+      two.budget.admitted('queued-1' as MessageId)
+      two.budget.admitted('queued-2' as MessageId)
+      vi.advanceTimersByTime(10)
+      expect(two.exceeded).toHaveBeenCalledExactlyOnceWith(
+        'child stopped: no new model step started for 10ms; 2 queued messages were discarded unread',
+      )
+    })
+
+    it('does not count messages the inbox already discarded', () => {
+      const { budget: b, exceeded } = budget({ maxSteps: 1 })
+      b.running()
+      b.admitted('withdrawn' as MessageId)
+      b.discarded('withdrawn' as MessageId)
+      b.stepEntered()
+      b.stepEntered()
+      expect(exceeded).toHaveBeenCalledExactlyOnceWith('child stopped after its limit of 1 model steps')
+    })
+
+    it('restarts the budget for a parent message claimed while the child is idle', () => {
+      const { budget: b, exceeded } = budget({ deadlineMs: 100 })
+      b.running()
+      vi.advanceTimersByTime(90)
+      b.idle()
+      b.admitted('next' as MessageId)
+      b.claimed('next' as MessageId)
+      b.running()
+      vi.advanceTimersByTime(99)
+      expect(exceeded).not.toHaveBeenCalled()
+    })
+  })
+
+  it('opens no stall window for a step proposed while idle', () => {
+    const { budget: b, exceeded } = budget({ stallMs: 10 })
+    b.stepProposed()
+    vi.advanceTimersByTime(100)
+    expect(exceeded).not.toHaveBeenCalled()
+  })
+
   it('reports only the first limit reached', () => {
     const { budget: b, exceeded } = budget({ deadlineMs: 30, stallMs: 30 })
     b.running()
@@ -162,6 +243,7 @@ describe('MessageBudget', () => {
     b.running()
     b.stop()
     vi.advanceTimersByTime(1_000)
+    b.admitted('late' as MessageId)
     nextMessage(b)
     b.running()
     vi.advanceTimersByTime(1_000)
