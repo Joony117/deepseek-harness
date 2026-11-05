@@ -5959,7 +5959,7 @@
       "kind": "event",
       "event": "compaction/summary",
       "surface": false,
-      "digest": "e2f9a41e0989f54ed8cee80f8db2bcf9d60a5c810dc9d45b83fa050b9dce7602",
+      "digest": "7aefda7246ea473759f90a32b9b198c964ada08b88d259ca9cdd76494e5ad1bb",
       "schema": {
         "root": 0,
         "nodes": [
@@ -6033,6 +6033,11 @@
                 "name": "rawOutput",
                 "type": 6,
                 "optional": false
+              },
+              {
+                "name": "rejectedOutput",
+                "type": 6,
+                "optional": true
               },
               {
                 "name": "shadowedRange",
@@ -22536,7 +22541,7 @@
         "packages/llm/llm/src/types.ts#ReplayEnvelope"
       ],
       "sources": [
-        "packages/llm/llm/src/types.ts:448"
+        "packages/llm/llm/src/types.ts:458"
       ]
     },
     {
@@ -23063,7 +23068,7 @@
       "digest": "2abb711460e6238d851c30f3e4bdd87a2aa1887ee70575b3d3b7b25610673095",
       "names": [],
       "sources": [
-        "packages/llm/llm/src/types.ts:473"
+        "packages/llm/llm/src/types.ts:483"
       ]
     },
     {
@@ -23325,7 +23330,7 @@
       "digest": "3bec87f9e6ab3da03346f49923d3c51621debc0159df68605e543c3b2a026f90",
       "names": [],
       "sources": [
-        "packages/llm/llm/src/types.ts:471"
+        "packages/llm/llm/src/types.ts:481"
       ]
     },
     {
@@ -23466,7 +23471,7 @@
         "packages/llm/llm/src/types.ts#StreamChunk"
       ],
       "sources": [
-        "packages/llm/llm/src/types.ts:470"
+        "packages/llm/llm/src/types.ts:480"
       ]
     },
     {
@@ -23574,7 +23579,7 @@
         "packages/workflow/workflow/src/types.ts#WorkflowRunId"
       ],
       "sources": [
-        "packages/api/session-controller/src/types.ts:409",
+        "packages/api/session-controller/src/types.ts:443",
         "packages/attachment/attachment/src/brand.ts:6",
         "packages/compaction/compaction/src/brand.ts:4",
         "packages/core/session/src/types.ts:21",
@@ -23592,8 +23597,8 @@
         "packages/llm/llm-retry/src/brand.ts:4",
         "packages/llm/llm/src/brand.ts:16",
         "packages/llm/llm/src/brand.ts:31",
-        "packages/llm/llm/src/brand.ts:43",
-        "packages/llm/llm/src/brand.ts:67",
+        "packages/llm/llm/src/brand.ts:56",
+        "packages/llm/llm/src/brand.ts:80",
         "packages/schedule/schedule/src/types.ts:14",
         "packages/session/session-title/src/index.ts:42",
         "packages/session/session-title/src/types.ts:17",
@@ -23871,7 +23876,7 @@
       "digest": "5dd766ccd1702a1142ad8b4bd44f2242f8e8a6752669ad3de0a5d224329b1438",
       "names": [],
       "sources": [
-        "packages/compaction/compaction/src/types.ts:82"
+        "packages/compaction/compaction/src/types.ts:88"
       ]
     },
     {
@@ -23979,7 +23984,7 @@
         "packages/llm/llm/src/types.ts#ToolSchema"
       ],
       "sources": [
-        "packages/llm/llm/src/types.ts:491"
+        "packages/llm/llm/src/types.ts:501"
       ]
     },
     {
@@ -24096,7 +24101,7 @@
       "digest": "6dacb1584f2bfbe209dc6b6f578d51da6d55595f64d0e63c727c98f359278def",
       "names": [],
       "sources": [
-        "packages/api/session-controller/src/types.ts:418"
+        "packages/api/session-controller/src/types.ts:452"
       ]
     },
     {
@@ -24250,6 +24255,11 @@
     },
     {
       "digest": "7a651f3b672c52fb615f22c0ce9cb3cc5b22aad92e6bbeefb0808fd7b9233a50",
+      "names": [],
+      "sources": []
+    },
+    {
+      "digest": "7aefda7246ea473759f90a32b9b198c964ada08b88d259ca9cdd76494e5ad1bb",
       "names": [],
       "sources": []
     },
@@ -24501,7 +24511,7 @@
       "digest": "88a610b831be6d92612a464be5c7d0b88ec24d97bd299837bf74bf7672183c9a",
       "names": [],
       "sources": [
-        "packages/llm/llm/src/types.ts:474"
+        "packages/llm/llm/src/types.ts:484"
       ]
     },
     {
@@ -24652,7 +24662,7 @@
       "digest": "95080295115fbd83544520ba247b68a03790131f6a2eac323d388758cb542f65",
       "names": [],
       "sources": [
-        "packages/llm/llm/src/types.ts:472"
+        "packages/llm/llm/src/types.ts:482"
       ]
     },
     {
@@ -24698,11 +24708,6 @@
     },
     {
       "digest": "99135d8a3937977955eaac5f8f04f930dcd1562f8450a54a51cde9b921dd59a6",
-      "names": [],
-      "sources": []
-    },
-    {
-      "digest": "9947aa5938fe19a895298da412917acbf9ffb5093a73ab8baa257e6ae9e63a07",
       "names": [],
       "sources": []
     },
@@ -24788,7 +24793,7 @@
       "names": [],
       "sources": [
         "packages/compaction/compaction/src/types.ts:38",
-        "packages/compaction/compaction/src/types.ts:84"
+        "packages/compaction/compaction/src/types.ts:90"
       ]
     },
     {
@@ -24852,7 +24857,7 @@
       "digest": "a2b49331716ba0a7078b026d145306a70eae64b7313c3e6204bd931e75ec3bb1",
       "names": [],
       "sources": [
-        "packages/llm/llm/src/types.ts:477"
+        "packages/llm/llm/src/types.ts:487"
       ]
     },
     {
@@ -24951,11 +24956,6 @@
     },
     {
       "digest": "a927d444c928ac0efd9dd8b2e7d7d04d711c264cb71578d81e0e2fd143ff669f",
-      "names": [],
-      "sources": []
-    },
-    {
-      "digest": "a99ec0993c62c058e50af9f68922202a3b54f5e259bc2abf1915a73381d2316d",
       "names": [],
       "sources": []
     },
@@ -25466,7 +25466,7 @@
       "digest": "ca59530d1a4f3e191b4032bc4a20eded0d827db8b5a7efb27b3af9e9b456c6f2",
       "names": [],
       "sources": [
-        "packages/compaction/compaction/src/types.ts:72"
+        "packages/compaction/compaction/src/types.ts:78"
       ]
     },
     {
@@ -25516,6 +25516,11 @@
       ]
     },
     {
+      "digest": "cf17e9935b6154446d77c7ff38c2c6c6bb239f60f3d4e4cbe5e6fc3f8d627706",
+      "names": [],
+      "sources": []
+    },
+    {
       "digest": "cffcdc19881ab61ec0a9ce18743996f7ac44ac8889f34dfac36ae745574aa22f",
       "names": [
         "packages/goal/goal/src/domain.ts#GoalClearChangeMeta"
@@ -25538,7 +25543,7 @@
       "digest": "d4b739491689cc6bb13d07ffac1a32239875abda364c0d5edd8f74faf5e9c00d",
       "names": [],
       "sources": [
-        "packages/llm/llm/src/types.ts:475"
+        "packages/llm/llm/src/types.ts:485"
       ]
     },
     {
@@ -25553,6 +25558,11 @@
     },
     {
       "digest": "d595ec73b32b016a6055333c67a5d646032b22e672da1d4a09c5b1ae398a093a",
+      "names": [],
+      "sources": []
+    },
+    {
+      "digest": "d59ea123cc0c5ff85f795d488dfb00b24af5dcb1c8f150dd51ac3f585687fac4",
       "names": [],
       "sources": []
     },
@@ -25705,11 +25715,6 @@
     },
     {
       "digest": "e2d0367e5716bc188435e51718ebff8ce873190625fa93b1c5331102d98758fa",
-      "names": [],
-      "sources": []
-    },
-    {
-      "digest": "e2f9a41e0989f54ed8cee80f8db2bcf9d60a5c810dc9d45b83fa050b9dce7602",
       "names": [],
       "sources": []
     },
@@ -25946,7 +25951,7 @@
       "digest": "f1a96afe7503ac1817de769cd0ba13d9b80111c7034c50106b3344ecc14cc515",
       "names": [],
       "sources": [
-        "packages/llm/llm/src/types.ts:476"
+        "packages/llm/llm/src/types.ts:486"
       ]
     },
     {

@@ -2145,6 +2145,12 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         returns: 'the new Session identity.',
       },
       {
+        signature: '@Remote(\'delete\') delete(request: SessionDeleteRequest, signal: AbortSignal): Promise<SessionDeleteValue>',
+        description: 'Durably delete one Session after releasing any lifecycle this Host owns. The client-facing row survives until the backend confirms absence: a refusal or a backend failure leaves it visible, with an error.',
+        parameters: [{ name: 'request', description: 'Session identity to remove.' }, { name: 'signal', description: 'caller cancellation for the persistence delete.' }],
+        returns: 'acknowledgement that the durable artifact is gone.',
+      },
+      {
         signature: '@Remote(\'prompt\') async prompt(request: SessionPromptRequest, signal: AbortSignal): Promise<SessionPromptValue>',
         description: 'Admit one prompt after explicitly resuming its Session.',
         parameters: [{ name: 'request', description: 'Session identity, prompt content, source metadata, and delivery mode.' }, { name: 'signal', description: 'caller cancellation before prompt admission begins.' }],
@@ -2262,6 +2268,17 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         description: 'List every stored session visible to this process, in no promised order.',
         parameters: [{ name: 'options', description: 'optional cancellation.' }],
         returns: 'one snapshot per stored session.',
+      },
+      {
+        signature: 'readonly supportsDeletion: boolean = false',
+        description: 'Whether this backend can durably remove a stored session. A backend that declares `true` must override delete.\n\nDeletion is optional because absence is a postcondition not every medium can honor: an append-only or write-once store can stop serving a log but cannot promise the bytes are gone. Declaring the capability falsely would let a frontend report a durable deletion that never happened.',
+        parameters: [],
+      },
+      {
+        signature: 'delete(_id: SessionId, signal?: AbortSignal): Promise<void>',
+        description: 'Durably remove one session and everything this backend keeps for it. Resolving means the artifact is gone.\n\nRemoving an identity with no stored artifact SUCCEEDS: the postcondition is absence, so retrying a partially-applied delete can reach a clean end state. Callers test supportsDeletion first.\n\nImplementations MUST refuse while the identity is still claimed — any write ownership (a live handle, a create or write open still constructing, another process\'s lease) or an in-flight read — and MUST hold write ownership for the whole removal, so no `create` or write `open` can materialize the identity mid-delete. Only a write handle can publish bytes, so that claim is also what keeps a capability admitted before the deletion from recreating the log. A fresh explicit create MAY reuse the id afterwards as a new incarnation.',
+        parameters: [{ name: '_id', description: 'the persisted session to remove.' }, { name: 'signal', description: 'optional cancellation, honored before the removal starts.' }],
+        throws: ['{SessionDeleteConflictError} while the identity is still claimed.', 'when this backend does not support deletion.'],
       },
     ],
   },
@@ -7082,6 +7099,14 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface SessionCreateValue {\n    readonly sessionId: SessionId;\n    readonly agentPreset?: string;\n}',
   },
   {
+    name: 'SessionDeleteRequest',
+    declaration: 'export interface SessionDeleteRequest {\n    readonly sessionId: SessionId;\n}',
+  },
+  {
+    name: 'SessionDeleteValue',
+    declaration: 'export interface SessionDeleteValue {\n    readonly deleted: true;\n}',
+  },
+  {
     name: 'SessionEndInput',
     declaration: 'export interface SessionEndInput {\n    reason: \'clear\' | \'logout\' | \'prompt_input_exit\' | \'resume\' | \'other\';\n    sessionId: string;\n}',
   },
@@ -7862,6 +7887,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export type SubagentListEntry = SubagentCatalogRow & {\n    readonly kind: \'child\';\n    readonly hasChildren: boolean;\n} | {\n    readonly kind: \'diagnostic\';\n    readonly id: SessionId;\n    readonly reason: \'corrupt\' | \'unsupported\' | \'unavailable\';\n};',
   },
   {
+    name: 'SubagentMessageLimits',
+    declaration: 'export interface SubagentMessageLimits {\n    readonly maxSteps?: number;\n    readonly deadlineMs?: number;\n    readonly stallMs?: number;\n}',
+  },
+  {
     name: 'SubagentPromptReceipt',
     declaration: 'export interface SubagentPromptReceipt {\n    readonly messageId: MessageId;\n}',
   },
@@ -7875,7 +7904,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'SubagentProvider',
-    declaration: 'export interface SubagentProvider {\n    readonly name: string;\n    readonly capabilities: SubagentCapabilities;\n    readonly inheritsParentContext: boolean;\n    readonly agentRouteDefaults?: Readonly<{\n        provider: string;\n        model: string;\n    }>;\n    start?(request: ResolvedSubagentStartRequest): Promise<SubagentRun>;\n    prepareContinuable?(request: ContinuableCreateRequest): Promise<ContinuableCreateSpec>;\n}',
+    declaration: 'export interface SubagentProvider {\n    readonly name: string;\n    readonly capabilities: SubagentCapabilities;\n    readonly inheritsParentContext: boolean;\n    readonly agentRouteDefaults?: Readonly<{\n        provider: string;\n        model: string;\n    }>;\n    readonly messageLimits?: SubagentMessageLimits | undefined;\n    start?(request: ResolvedSubagentStartRequest): Promise<SubagentRun>;\n    prepareContinuable?(request: ContinuableCreateRequest): Promise<ContinuableCreateSpec>;\n}',
   },
   {
     name: 'SubagentResult',
