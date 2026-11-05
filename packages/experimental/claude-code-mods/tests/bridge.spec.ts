@@ -538,8 +538,9 @@ describe('the mods API over harness services', () => {
         version: MODS_API_VERSION,
         usage: { startedAt: agent.session.header.createdAt, context: { window: 0 }, rateLimits: [] },
         messages: [
-          { role: 'user', text: 'hello', toolUses: [] },
+          // A fresh session's runtime-context snapshot leads its first turn (fork perf(context)).
           { role: 'user', text: `<system-reminder>\nThe following information describes your current session:\n\nCurrent working directory: ${JSON.stringify(h.workspace)}.\n</system-reminder>`, toolUses: [] },
+          { role: 'user', text: 'hello', toolUses: [] },
           { role: 'assistant', text: 'ok', toolUses: [] },
         ],
       })
@@ -664,7 +665,7 @@ describe('commands and prompts raised by a mod', () => {
     await agent.whenIdle()
     expect(JSON.stringify(adapter.requests[0]?.messages)).toContain('Message from the \\"driver-mod\\" mod:\\nfrom the mod')
     // Claude Code submits a mod's prompt as the user's own; the framing in the text names the mod.
-    const submitted = events(agent).find(e => e.type === 'user/message')
+    const submitted = events(agent).find(e => e.type === 'user/message' && e.data.source.kind !== 'runtime-context')
     expect(submitted?.type === 'user/message' && submitted.data.source).toEqual({ kind: 'user' })
 
     const relayed = await h.ctx.commands.execute(agent, '/relay', [], signal)
