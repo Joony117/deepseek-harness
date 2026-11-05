@@ -48,7 +48,7 @@ earlier moves (rc.1 cutover, rc.3 rebase, review rounds) lives in the tracker
 | (d2) strict preflight | under the same switch a compatibility-preflight denial throws instead of disabling the row; an `allow-version` exemption still admits it |
 | (h) retired plugin source | `ToolRunContext.deferContext` rewrites a 0.1.x `{ kind: 'plugin', plugin }` source to `{ kind: 'plugin:<name>' }`, other fields kept, as the v3→v4 migration names an unknown producer (v4 persistence refuses `plugin`; dsh-plugin-subscriptions' image_generate) |
 | (i) icon alias | ui-primitives exports `IconSparkle16 = IconSparkleRegular` for dsh-plugin-subscriptions' client half (else boot-client "did not activate"); the upstream icon-set test skips the alias |
-| (j) child limits | spawn/fork Config `maxSteps`, `deadlineMs`, `stallMs` (provider `messageLimits`). Per parent message: they restart when a turn claims a message the parent sent, and time counts only while the child runs. A hit disposes the Activation (owned children too) with `stopReason: 'error'` + diagnostic, which counts queued parent messages discarded unread; a caller stop (dispose, interrupt, archive) stays `aborted`, and no limit fires while it unwinds. `stallMs` counts time inside a tool call (e.g. a workflow tool waiting on grandchildren); only idle time is exempt. Re-read by provider name at cold resume; a resumed child whose provider is gone runs unbounded. Replaces the rc.2 in-process driver budgets (upstream removed that driver, 3d852a1cea) |
+| (j) child limits | spawn/fork Config `maxSteps`, `deadlineMs`, `stallMs` (provider `messageLimits`). Per parent message: they restart when a turn claims a message the parent sent, and time counts only while the child runs. A hit disposes the Activation (owned children too) with `stopReason: 'error'` + diagnostic, which counts queued parent messages discarded unread; a caller stop (dispose, interrupt, archive) stays `aborted`, and no limit fires while it unwinds. `stallMs` counts time inside a tool call (e.g. a workflow tool waiting on grandchildren); only idle time is exempt. Re-read by provider name at cold resume; a resumed child whose provider is gone runs unbounded. Replaces the rc.2 in-process driver budgets (upstream removed that driver when it unified activation lifecycles) |
 | (e) this file | |
 
 Generated catalogs, docs graphs and `*.i18n.yaml` records are not carried as hand edits:
@@ -96,7 +96,7 @@ git -C $S/harness rebase --onto <new-tag> <old-tag> codex/harness
 ```sh
 corepack pnpm install --frozen-lockfile
 corepack pnpm run gen-cordis-catalog && corepack pnpm run gen-doc-graphs && corepack pnpm run gen-config-catalog
-corepack pnpm run gen-persistence-catalog
+corepack pnpm run gen-persistence-catalog && corepack pnpm run gen-cordis-inspect-catalog
 corepack pnpm run gen-client-catalog && corepack pnpm run gen-cordis-api
 npx tsx scripts/verify-translation-pairing.ts --list    # then --write <pairs> for the pairs the fork changed
 corepack pnpm run typecheck && corepack pnpm run build
