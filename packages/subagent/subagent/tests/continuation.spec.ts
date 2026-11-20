@@ -4627,4 +4627,33 @@ describe('per-message limits', () => {
       await ctx.fiber.dispose()
     }
   })
+
+  it.each([
+    ['a sibling\'s message does not restart it', false, 'error', 1],
+    ['the parent\'s message restarts it', true, 'completed', 2],
+  ] as const)('only a message from the direct parent restarts a live child\'s budget: %s', async (_label, fromParent, stopReason, requests) => {
+    const releaseChild = Promise.withResolvers<undefined>()
+    const adapter = new TreeAdapter({
+      child: [{ chunks: toolCallResponse('c1', 'noop', {}), gate: releaseChild.promise }, { chunks: textResponse('second step') }],
+    })
+    const { ctx, parent } = await boundedWith(adapter, { maxSteps: 1 })
+    parkParent(ctx, parent)
+    const child = await startTreeMember(ctx, parent, 'child', 'bounded')
+    const sibling = await startTreeMember(ctx, parent, 'sibling')
+    try {
+      await vi.waitFor(() => {
+        expect(requestsFor(adapter, child.childId)).toHaveLength(1)
+        expect(requestsFor(adapter, sibling.childId)).toHaveLength(1)
+      })
+      const sender = fromParent ? parent : ctx.agents.get(sibling.childId)!
+      await ctx.subagents.sendMessage(sender, child.childId, message('more work'), { signal: testSignal })
+      releaseChild.resolve(undefined)
+      await expect(child.result).resolves.toMatchObject({ stopReason })
+      expect(requestsFor(adapter, child.childId)).toHaveLength(requests)
+    } finally {
+      releaseChild.resolve(undefined)
+      await sibling.dispose()
+      await ctx.fiber.dispose()
+    }
+  })
 })

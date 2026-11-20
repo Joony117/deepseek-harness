@@ -1311,7 +1311,12 @@ export class SubagentManager {
     options.authorize?.()
     this.assertAdmitting(parent)
     // Recorded before delivery so a claim during delivery still restarts the budget.
-    if (activation.kind === 'local') activation.budget?.admitted(message.id)
+    // Another member's relay does not restart it; only host input or the direct parent's does.
+    const { source } = options
+    if (activation.kind === 'local'
+      && (source.kind !== 'agent-message' || source.senderSessionId === activation.ancestors.at(-1))) {
+      activation.budget?.admitted(message.id)
+    }
     try {
       this.deliver(activation, message, options.delivery)
     } finally {
@@ -1323,8 +1328,8 @@ export class SubagentManager {
 
   /**
    * Enforce one provider's per-message limits on a local Activation. They
-   * restart when a turn claims a message accepted through
-   * {@link submitAdmitted}; time counts only while the child runs, and no limit
+   * restart when a turn claims a host message or a direct-parent relay accepted
+   * through {@link submitAdmitted}; time counts only while the child runs, and no limit
    * fires while a cancellation someone else requested (interrupt, archive)
    * unwinds. A limit reached first records its diagnostic and disposes the
    * Activation together with every resident descendant it created; startups
