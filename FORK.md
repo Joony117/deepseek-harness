@@ -20,10 +20,12 @@ earlier moves (rc.1 cutover, rc.3 rebase, review rounds) lives in the tracker
 
 ## Rules
 
-1. **Commits, pushes, branch moves and the swap are owner-only.** An agent works in a
-   staging clone and hands over a branch or patches; the owner lands them.
+1. **Agents may commit, move branches and push to `fork`.** The owner (2026-11-20, verbatim):
+   "delete that fork rule, as long as you commit/push to my fork in my GH you can do what ever,
+   just dont push to the main DSH devs github". Steps 5 and 6 of the move below still need an
+   owner go: they change the live `~/.dsh`, not git.
 2. **Push to `fork` only.** `origin` is upstream and its push URL is disabled locally;
-   never undo that. Never open an upstream PR without a Bead authorising it.
+   never undo that. Never open an upstream PR unless the owner asks for it.
 3. **Live F stays clean on the working branch.** `git status` in `E:\deepseek-harness`
    is empty, and `master` stays a clean mirror of `origin/master`.
 4. **Never `reset --hard`, `clean -fd` or `checkout .`.** The gitignored build output
