@@ -464,8 +464,11 @@ export class BasicCompactionEngine extends CompactionEngine {
       info.context.contextWindow,
       reservedCompletionTokens(header, info.defaultMaxTokens),
     )
+    // A model-switch check (requireBelowThreshold) must still prove the
+    // destination fits, so it neither reads nor writes the backoff.
+    const backoffs = requireBelowThreshold ? undefined : this.pressureBackoff
     if (measurement.totalTokens < spec.thresholdTokens) {
-      this.pressureBackoff.delete(agent.session)
+      backoffs?.delete(agent.session)
       return null
     }
 
@@ -480,16 +483,14 @@ export class BasicCompactionEngine extends CompactionEngine {
       measurement = meter.measure(agent.session, header)
     }
     if (measurement.totalTokens < spec.thresholdTokens) {
-      this.pressureBackoff.delete(agent.session)
+      backoffs?.delete(agent.session)
       return null
     }
 
     // After a non-converging attempt, wait for real growth instead of paying
-    // for the same summary again on every tool step. A model-switch check
-    // (requireBelowThreshold) must still prove the destination fits, so it
-    // neither reads nor writes the backoff.
+    // for the same summary again on every tool step.
     // ponytail: fixed 5% of the window (max 32K); make it a policy field if routes need tuning.
-    const backoff = requireBelowThreshold ? undefined : this.pressureBackoff.get(agent.session)
+    const backoff = backoffs?.get(agent.session)
     const growthTokens = Math.max(1, Math.min(Math.floor(spec.contextWindow * 0.05), 32_768))
     if (backoff?.targetKey === targetKey
       && measurement.totalTokens < backoff.totalTokens + growthTokens) return null
@@ -509,7 +510,7 @@ export class BasicCompactionEngine extends CompactionEngine {
         if (spec.appendOnly && prune !== undefined) prune.pruneSession(agent.session)
         measurement = meter.measure(agent.session, header)
         if (measurement.totalTokens < spec.thresholdTokens) {
-          this.pressureBackoff.delete(agent.session)
+          backoffs?.delete(agent.session)
           return result
         }
       }
@@ -520,9 +521,7 @@ export class BasicCompactionEngine extends CompactionEngine {
       )
     } catch (error: unknown) {
       // A failed attempt leaves the surface unchanged, so `measurement` is current.
-      if (!signal.aborted && !requireBelowThreshold) {
-        this.pressureBackoff.set(agent.session, { targetKey, totalTokens: measurement.totalTokens })
-      }
+      if (!signal.aborted) backoffs?.set(agent.session, { targetKey, totalTokens: measurement.totalTokens })
       throw error
     }
   }

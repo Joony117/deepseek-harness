@@ -2376,6 +2376,26 @@ describe('automatic listener and loader composition', () => {
     expect(compact.calls).toHaveLength(2)
   })
 
+  it('keeps pressure backoff across a model-switch check that fits', async () => {
+    const ctx = createContext()
+    ctx.logger.warn = (() => undefined) as typeof ctx.logger.warn
+    ctx.llm.registerAdapter(['roomy'], new ContextAdapter(1_000_000))
+    const compact = new TestCompactionEngine(ctx, { thresholdRatio: 0.5, retainTokens: 180 })
+    compact.summary = Array.from({ length: 200 }, (_, index) => ({ type: 'text', text: `verbose ${index}` }))
+    const session = conversation(4)
+    const owner = agent(session, MODEL)
+    await preStep(ctx, owner)
+    expect(compact.calls).toHaveLength(1)
+
+    // The switch check fits the larger window at once; the committed route is unchanged.
+    const roomy = { provider: 'roomy', model: 'roomy' }
+    await expect(agentEvents(ctx, owner).waterfall(
+      'agent/request', { turn: 5, step: 1, signal: SIGNAL }, () => Promise.resolve(roomy),
+    )).resolves.toEqual(roomy)
+    await preStep(ctx, owner)
+    expect(compact.calls).toHaveLength(1)
+  })
+
   it('backs off after successful compaction that stays above threshold (#5669)', async () => {
     const ctx = createContext()
     ctx.logger.warn = (() => undefined) as typeof ctx.logger.warn
