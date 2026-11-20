@@ -1327,7 +1327,8 @@ export class SubagentManager {
    * {@link submitAdmitted}; time counts only while the child runs, and no limit
    * fires while a cancellation someone else requested (interrupt, archive)
    * unwinds. A limit reached first records its diagnostic and disposes the
-   * Activation, which also stops owned children; {@link close} disarms the
+   * Activation together with every resident descendant it created; startups
+   * it still has pending are refused by admission. {@link close} disarms the
    * budget, so a stop already in progress keeps its own result.
    * @param activation - the local Activation just published.
    * @param provider - provider name whose configured limits apply.
@@ -1341,9 +1342,12 @@ export class SubagentManager {
       || child.inbox.nextStep.some(message => message.id === messageId)
     const budget = new MessageBudget(limits, (diagnostic) => {
       activation.limitStop = diagnostic
+      // The child's own subtree stops with it; siblings and the rest of the tree keep running.
+      const subtree = [...this.resident.values()]
+        .filter(item => item === activation || item.ancestors.includes(activation.childId))
       // Never awaited: disposal waits for the driver that may be inside this
       // Activation's own pre-step, so awaiting here would deadlock.
-      void this.dispose(activation).catch(
+      void this.disposeRoots(subtree, 'scoped activation(s)').catch(
         /* v8 ignore next -- the settlement observer already reports teardown failures; this only keeps the rejection handled. */
         (error: unknown) => { this.reportTeardownFailure(activation, error) },
       )

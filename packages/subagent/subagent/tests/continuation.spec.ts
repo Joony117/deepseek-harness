@@ -84,6 +84,29 @@ class SessionRoutedAdapter extends LlmAdapter {
   }
 }
 
+/** Gated scripts keyed by session id; an unscripted call stays open until it is cancelled. */
+class TreeAdapter extends LlmAdapter {
+  readonly requests: GenerateOptions[] = []
+
+  constructor(private readonly scripts: Record<string, GatedEntry[]>) {
+    super()
+  }
+
+  async * stream(options: GenerateOptions): AsyncIterable<StreamChunk> {
+    this.requests.push(options)
+    const entry = this.scripts[String(options.sessionId)]?.shift()
+    if (entry === undefined) {
+      yield { type: 'block-start', index: 0, blockType: 'text' }
+      await new Promise<never>((_resolve, reject) => {
+        if (options.signal?.aborted) reject(new Error('aborted'))
+        options.signal?.addEventListener('abort', () => { reject(new Error('aborted')) }, { once: true })
+      })
+    }
+    if (entry?.gate) await entry.gate
+    for (const chunk of entry?.chunks ?? []) yield chunk
+  }
+}
+
 // Each persistence-backed temp root cleans up by closing its handle before
 // removing the directory: Windows rmSync over a dir holding a still-open handle
 // fails with EPERM.
@@ -4531,6 +4554,76 @@ describe('per-message limits', () => {
       expect(ctx.subagents.getProvider('bounded')?.messageLimits).toBeUndefined()
     } finally {
       await started.dispose()
+      await ctx.fiber.dispose()
+    }
+  })
+
+  /** A caller-delivered child with a fixed Session id, so the TreeAdapter can script it. */
+  function startTreeMember(ctx: Context, creator: Agent, id: string, provider = 'spawn') {
+    return ctx.subagents.startActivation({ ...startSpec(creator, provider), childId: SessionId(id), delivery: 'caller' })
+  }
+
+  it('stops the limited child\'s own descendants but not its siblings', async () => {
+    const releaseChild = Promise.withResolvers<undefined>()
+    const adapter = new TreeAdapter({
+      child: [{ chunks: toolCallResponse('c1', 'noop', {}), gate: releaseChild.promise }, { chunks: textResponse('never requested') }],
+    })
+    const { ctx, parent } = await boundedWith(adapter, { maxSteps: 1 })
+    parkParent(ctx, parent)
+    const child = await startTreeMember(ctx, parent, 'child', 'bounded')
+    const sibling = await startTreeMember(ctx, parent, 'sibling')
+    try {
+      await vi.waitFor(() => { expect(requestsFor(adapter, child.childId)).toHaveLength(1) })
+      const grandchild = await startTreeMember(ctx, ctx.agents.get(child.childId)!, 'grandchild')
+      await vi.waitFor(() => {
+        expect(requestsFor(adapter, grandchild.childId)).toHaveLength(1)
+        expect(requestsFor(adapter, sibling.childId)).toHaveLength(1)
+      })
+      releaseChild.resolve(undefined)
+      await expect(child.result).resolves.toMatchObject({ stopReason: 'error', diagnostic: 'child stopped after its limit of 1 model steps' })
+      await vi.waitFor(() => { expect(ctx.agents.get(grandchild.childId)?.status).toBeUndefined() }, { timeout: 2_000 })
+      await expect(grandchild.result).resolves.toMatchObject({ stopReason: 'aborted' })
+      expect(ctx.agents.get(sibling.childId)?.status).toBe('running')
+    } finally {
+      releaseChild.resolve(undefined)
+      await sibling.dispose()
+      await ctx.fiber.dispose()
+    }
+  })
+
+  it('refuses a grandchild whose startup was still pending when its creator hit a limit', async () => {
+    const releaseChild = Promise.withResolvers<undefined>()
+    const adapter = new TreeAdapter({
+      child: [{ chunks: toolCallResponse('c1', 'noop', {}), gate: releaseChild.promise }, { chunks: textResponse('never requested') }],
+    })
+    const { ctx, parent } = await boundedWith(adapter, { maxSteps: 1 })
+    parkParent(ctx, parent)
+    const spawn = ctx.subagents.getProvider('spawn')!
+    const prepared = spawn.prepareContinuable!.bind(spawn)
+    const preparing = Promise.withResolvers<undefined>()
+    const releasePrepare = Promise.withResolvers<undefined>()
+    vi.spyOn(spawn, 'prepareContinuable').mockImplementation(async (request) => {
+      preparing.resolve(undefined)
+      await releasePrepare.promise
+      return prepared(request)
+    })
+    const child = await startTreeMember(ctx, parent, 'child', 'bounded')
+    try {
+      await vi.waitFor(() => { expect(requestsFor(adapter, child.childId)).toHaveLength(1) })
+      const grandchild = startTreeMember(ctx, ctx.agents.get(child.childId)!, 'grandchild')
+      void grandchild.catch(() => undefined)
+      await preparing.promise
+      releaseChild.resolve(undefined)
+      await expect(child.result).resolves.toMatchObject({ stopReason: 'error' })
+      await waitNoActivation(ctx, child.childId)
+      releasePrepare.resolve(undefined)
+      await expect(grandchild).rejects.toBeInstanceOf(SubagentError)
+      expect(ctx.agents.get(SessionId('grandchild'))?.status).toBeUndefined()
+      expect(managerState(ctx).resident.has(SessionId('grandchild'))).toBe(false)
+      expect(requestsFor(adapter, SessionId('grandchild'))).toHaveLength(0)
+    } finally {
+      releaseChild.resolve(undefined)
+      releasePrepare.resolve(undefined)
       await ctx.fiber.dispose()
     }
   })
