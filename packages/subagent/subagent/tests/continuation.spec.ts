@@ -4591,39 +4591,37 @@ describe('per-message limits', () => {
     }
   })
 
-  it('refuses a grandchild whose startup was still pending when its creator hit a limit', async () => {
+  it('cancels a grandchild startup still inside agent/created when its creator hits a limit', async () => {
     const releaseChild = Promise.withResolvers<undefined>()
     const adapter = new TreeAdapter({
       child: [{ chunks: toolCallResponse('c1', 'noop', {}), gate: releaseChild.promise }, { chunks: textResponse('never requested') }],
     })
     const { ctx, parent } = await boundedWith(adapter, { maxSteps: 1 })
     parkParent(ctx, parent)
-    const spawn = ctx.subagents.getProvider('spawn')!
-    const prepared = spawn.prepareContinuable!.bind(spawn)
-    const preparing = Promise.withResolvers<undefined>()
-    const releasePrepare = Promise.withResolvers<undefined>()
-    vi.spyOn(spawn, 'prepareContinuable').mockImplementation(async (request) => {
-      preparing.resolve(undefined)
-      await releasePrepare.promise
-      return prepared(request)
+    const announcing = Promise.withResolvers<AbortSignal | undefined>()
+    const releaseHook = Promise.withResolvers<undefined>()
+    // In the Agent registry but not yet resident: only its startup controller can stop it.
+    ctx.on('agent/created', async ({ agent, signal }) => {
+      if (agent.id !== SessionId('grandchild')) return
+      announcing.resolve(signal)
+      await releaseHook.promise
     })
     const child = await startTreeMember(ctx, parent, 'child', 'bounded')
     try {
       await vi.waitFor(() => { expect(requestsFor(adapter, child.childId)).toHaveLength(1) })
       const grandchild = startTreeMember(ctx, ctx.agents.get(child.childId)!, 'grandchild')
       void grandchild.catch(() => undefined)
-      await preparing.promise
+      const startup = await announcing.promise
       releaseChild.resolve(undefined)
       await expect(child.result).resolves.toMatchObject({ stopReason: 'error' })
-      await waitNoActivation(ctx, child.childId)
-      releasePrepare.resolve(undefined)
-      await expect(grandchild).rejects.toBeInstanceOf(SubagentError)
-      expect(ctx.agents.get(SessionId('grandchild'))?.status).toBeUndefined()
+      await vi.waitFor(() => { expect(startup?.aborted).toBe(true) }, { timeout: 2_000 })
+      releaseHook.resolve(undefined)
+      await expect(grandchild).rejects.toThrow()
       expect(managerState(ctx).resident.has(SessionId('grandchild'))).toBe(false)
       expect(requestsFor(adapter, SessionId('grandchild'))).toHaveLength(0)
     } finally {
       releaseChild.resolve(undefined)
-      releasePrepare.resolve(undefined)
+      releaseHook.resolve(undefined)
       await ctx.fiber.dispose()
     }
   })

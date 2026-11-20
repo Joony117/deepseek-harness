@@ -121,6 +121,8 @@ type MaterializeInputs = MaterializeBase & (
  */
 interface Materialization {
   readonly root: Agent
+  /** The new child's creation ancestry; unset for restores, which resolve it later. */
+  readonly ancestors?: readonly SessionId[] | undefined
   readonly settled: Promise<void>
   readonly controller: AbortController
 }
@@ -333,7 +335,7 @@ export class SubagentManager {
     path: string | undefined,
   ): Promise<SubagentActivation & { messageId: MessageId }> {
     const parent = spec.parent
-    return this.trackStartup(ancestry.root, spec.signal, async (signal) => {
+    return this.trackStartup(ancestry, spec.signal, async (signal) => {
       const persistence = spec.delivery === 'caller' ? this.ctx.get('sessionPersistence') : this.requirePersistence()
       const childId = spec.childId ?? brandString<SessionId>(randomUUID())
       this.assertChildIdAvailable(childId)
@@ -459,7 +461,7 @@ export class SubagentManager {
   ): Promise<SubagentActivation> {
     const { provider, delivery, childId: _childId, name: _name, ...request } = spec
     const parent = request.parent
-    return this.trackStartup(ancestry.root, spec.signal, async (signal) => {
+    return this.trackStartup(ancestry, spec.signal, async (signal) => {
       let activation: Activation | undefined
       try {
         const cwd = await this.resolveDirectory(spec, signal)
@@ -726,12 +728,16 @@ export class SubagentManager {
   }
 
   /** Keep subagent tree shutdown and host waits joined to preparation, publication, and rollback. */
-  private trackStartup<T>(root: Agent, signal: AbortSignal, start: (signal: AbortSignal) => Promise<T>): Promise<T> {
+  private trackStartup<T>(
+    { root, ancestors }: Pick<Materialization, 'root' | 'ancestors'>,
+    signal: AbortSignal,
+    start: (signal: AbortSignal) => Promise<T>,
+  ): Promise<T> {
     this.assertAdmitting(root)
     signal.throwIfAborted()
     const settled = Promise.withResolvers<void>()
     const controller = new AbortController()
-    const materialization: Materialization = { root, settled: settled.promise, controller }
+    const materialization: Materialization = { root, ancestors, settled: settled.promise, controller }
     this.materializations.add(materialization)
     return start(AbortSignal.any([signal, controller.signal])).catch((error: unknown) => {
       if (error instanceof Error && error.name === 'AbortError') this.assertAdmitting(root)
@@ -1219,7 +1225,7 @@ export class SubagentManager {
 
   /** Reconstruct only the target under its subagent tree root; the caller owns acceptance or rollback. */
   private async restoreTarget(root: Agent, childId: SessionId, signal: AbortSignal): Promise<Activation> {
-    return this.trackStartup(root, signal, async (signal) => {
+    return this.trackStartup({ root }, signal, async (signal) => {
       using source = await this.observeContinuation(childId, signal)
       this.assertAdmitting(root)
       const ownEvents = source.events.slice(source.inheritedEventCount)
@@ -1332,8 +1338,8 @@ export class SubagentManager {
    * through {@link submitAdmitted}; time counts only while the child runs, and no limit
    * fires while a cancellation someone else requested (interrupt, archive)
    * unwinds. A limit reached first records its diagnostic and disposes the
-   * Activation together with every resident descendant it created; startups
-   * it still has pending are refused by admission. {@link close} disarms the
+   * Activation together with every resident descendant it created and aborts
+   * their pending startups. {@link close} disarms the
    * budget, so a stop already in progress keeps its own result.
    * @param activation - the local Activation just published.
    * @param provider - provider name whose configured limits apply.
@@ -1348,7 +1354,11 @@ export class SubagentManager {
       || child.inbox.nextStep.some(message => message.id === messageId)
     const budget = new MessageBudget(limits, (diagnostic) => {
       activation.limitStop = diagnostic
-      // The child's own subtree stops with it; siblings and the rest of the tree keep running.
+      // The child's own subtree stops with it, pending startups included;
+      // siblings and the rest of the tree keep running.
+      for (const pending of this.materializations) {
+        if (pending.ancestors?.includes(activation.childId)) pending.controller.abort()
+      }
       const subtree = [...this.resident.values()]
         .filter(item => item === activation || item.ancestors.includes(activation.childId))
       // Never awaited: disposal waits for the driver that may be inside this
