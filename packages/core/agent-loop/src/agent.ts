@@ -348,6 +348,8 @@ export class ReactLoopAgent implements Agent {
     }
     phase.turn = turn
     let turnEnds: TurnEndReason | null = null
+    // Whether to stop follows the latest step's own ending; turnEnds is only the reported outcome.
+    let stepEnd: StepEndReason | null = null
     let target: InboxTarget = 'next-turn'
     try {
       while (true) {
@@ -359,7 +361,7 @@ export class ReactLoopAgent implements Agent {
           return false
         }
         try {
-          if (turnEnds && decision.messages.length === 0) break
+          if (stepEnd && decision.messages.length === 0) break
           // A removed waking message or an enter decision rewritten to empty
           // still owns the initial turn boundary, but it spends no model call.
           if (phase.step === 0 && decision.messages.length === 0) {
@@ -374,11 +376,9 @@ export class ReactLoopAgent implements Agent {
             if (session === this.session) toolRecovery.observe(event)
           })
           try {
+            stepEnd = await this.step(decision)
             // max-tokens is sticky: once any step hits the ceiling, later steps
             // that complete normally must not downgrade the turn outcome.
-            const stepEnd = await this.step(decision)
-            // max-tokens stays sticky: a later completed step must not
-            // downgrade the turn outcome.
             if (turnEnds === null || turnEnds.kind !== 'max-tokens') turnEnds = stepEnd
           } catch (error: unknown) {
             try {
@@ -401,11 +401,11 @@ export class ReactLoopAgent implements Agent {
           decision.toolSet.dispose()
         }
         signal.throwIfAborted()
-        if (turnEnds && this.inbox.nextStep.length === 0) {
+        if (stepEnd && this.inbox.nextStep.length === 0) {
           await this.dispatch.serial('agent/turn-stopping', { turn, signal })
           signal.throwIfAborted()
         }
-        if (turnEnds && this.inbox.nextStep.length === 0) break
+        if (stepEnd && this.inbox.nextStep.length === 0) break
         target = 'next-step'
       }
     } catch (error: unknown) {
