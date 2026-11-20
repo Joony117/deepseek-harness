@@ -14,6 +14,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
 import AgentRegistry from '@deepseek-ai/dsh-agent'
+import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
+import TypertRegistry from '@deepseek-ai/dsh-typert-registry'
 import type { Agent, AgentFactory, AgentHandle, CreateAgentOptions } from '@deepseek-ai/dsh-agent'
 import SessionStore, { SessionId } from '@deepseek-ai/dsh-session'
 import { SessionDeleteConflictError } from '@deepseek-ai/dsh-session-persistence'
@@ -165,7 +167,9 @@ async function bench(options: {
 } = {}): Promise<Bench> {
   const ctx = new Context()
   roots.push(ctx)
+  await ctx.plugin(TypertRegistry)
   await ctx.plugin(SessionStore)
+  await ctx.plugin(SessionProjectionRegistry)
   await ctx.plugin(AgentRegistry)
   installSessionReadTestServices(ctx)
   ctx.provide('agentDefaultModel', {
