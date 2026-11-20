@@ -9,7 +9,7 @@ earlier moves (rc.1 cutover, rc.3 rebase, review rounds) lives in the tracker
 |---|---|
 | Working branch | `codex/harness` — all local work lives here |
 | Fork base | tag `dsh-v0.2.1-rc.5` (`b830ec950faba0a46dda564be3e2d854afed94f1`) |
-| Previous base | tag `dsh-v0.2.0-rc.2` (`639ed015397290b3745d163aafe02ffee4aa3f84`), branch `codex/harness-0.2.0-rc.2` (`0cf41bd1cf`) |
+| Previous base | tag `dsh-v0.2.0-rc.2` (`639ed015397290b3745d163aafe02ffee4aa3f84`), branch `codex/harness-0.2.0-rc.2` (`ec401d9ab0`: `0cf41bd1cf` plus this rule change) |
 | Rollback | branch `codex/harness-0.2.0-rc.2` + the pre-swap `~/.dsh` robocopy backup taken at the rc.5 swap (step 6.2) |
 | Upstream default branch | `master` (**not** `main`) |
 | `origin` | `https://github.com/deepseek-ai/deepseek-harness.git` — upstream; push URL locally set to `DISABLED-push-to-upstream-forbidden` |
@@ -20,10 +20,12 @@ earlier moves (rc.1 cutover, rc.3 rebase, review rounds) lives in the tracker
 
 ## Rules
 
-1. **Commits, pushes, branch moves and the swap are owner-only.** An agent works in a
-   staging clone and hands over a branch or patches; the owner lands them.
+1. **Agents may commit, move branches and push to `fork`.** The owner (2026-11-20, verbatim):
+   "delete that fork rule, as long as you commit/push to my fork in my GH you can do what ever,
+   just dont push to the main DSH devs github". Steps 5 and 6 of the move below still need an
+   owner go: they change the live `~/.dsh`, not git.
 2. **Push to `fork` only.** `origin` is upstream and its push URL is disabled locally;
-   never undo that. Never open an upstream PR without a Bead authorising it.
+   never undo that. Never open an upstream PR unless the owner asks for it.
 3. **Live F stays clean on the working branch.** `git status` in `E:\deepseek-harness`
    is empty, and `master` stays a clean mirror of `origin/master`.
 4. **Never `reset --hard`, `clean -fd` or `checkout .`.** The gitignored build output
