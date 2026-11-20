@@ -1370,6 +1370,8 @@ export class SubagentManager {
       if (status === 'running') budget.running()
       else budget.idle()
     })
+    // Work queued at creation can start the child before this subscription.
+    if (child.status === 'running') budget.running()
     // Each turn has its own signal; whoever cancels it, the limits wait for idle.
     // Watched from the outermost pre-step listener, so an abort that lands while
     // another plugin's pre-step work is pending is still seen, even if that

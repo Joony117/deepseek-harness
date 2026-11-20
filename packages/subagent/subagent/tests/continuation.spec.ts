@@ -4656,4 +4656,25 @@ describe('per-message limits', () => {
       await ctx.fiber.dispose()
     }
   })
+
+  it('arms the time limits for a child already running when they attach', async () => {
+    const adapter = new TreeAdapter({})
+    const { ctx, parent } = await boundedWith(adapter, { stallMs: 50 })
+    parkParent(ctx, parent)
+    // Work queued at creation starts the driver before the manager subscribes to the child's status.
+    ctx.on('agent/created', ({ agent }) => {
+      if (agent.id === SessionId('child')) agent.followup(createUserMessage({ source: { kind: 'user' }, content: message('early') }))
+    })
+    const child = await startTreeMember(ctx, parent, 'child', 'bounded')
+    try {
+      const unsettled = new Promise((resolve) => { setTimeout(() => { resolve('unsettled') }, 2_000) })
+      await expect(Promise.race([child.result, unsettled])).resolves.toMatchObject({
+        stopReason: 'error',
+        diagnostic: expect.stringContaining('child stopped: no new model step started for 50ms'),
+      })
+    } finally {
+      await child.dispose()
+      await ctx.fiber.dispose()
+    }
+  })
 })
