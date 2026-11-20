@@ -1195,7 +1195,7 @@ describe('ToolRuntime', () => {
       },
     }))
 
-    const result = await ctx.tools.execute({ signal: testToolSignal, callId: ToolCallId('legacy'), name: 'legacy', arguments: {} })
+    const result = await executeToolFixture(ctx, { signal: testToolSignal, callId: ToolCallId('legacy'), name: 'legacy', arguments: {} })
 
     expect(result.additionalContexts?.map(context => context.source)).toEqual([
       { kind: 'plugin:dsh-plugin-subscriptions', form: 'instructions' },

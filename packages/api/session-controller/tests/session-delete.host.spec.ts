@@ -198,7 +198,7 @@ async function bench(options: {
   const errors: { sessionId: SessionId; message: string }[] = []
   ctx.on('api-session/removed', (sessionId) => { removed.push(sessionId) })
   ctx.on('api-session/error', (sessionId, message) => { errors.push({ sessionId, message }) })
-  const remote = createSessionTestRemote(ctx, {
+  const remote = await createSessionTestRemote(ctx, {
     defaultModelSelection: () => ({ provider: 'fixture', model: 'fixture-model' }),
     cwd: CWD,
   })
@@ -420,7 +420,7 @@ describe('sessions.delete owns its fence and its marks', () => {
     const createGate = Promise.withResolvers<undefined>()
     const b = await bench({ factory: ctx => gatedCreateFactory(ctx, createEntered, createGate.promise) })
     const sessionId = SessionId('racing-activation')
-    const controller = createSessionTestController(b.ctx, {
+    const controller = await createSessionTestController(b.ctx, {
       defaultModelSelection: () => ({ provider: 'fixture', model: 'fixture-model' }),
       cwd: CWD,
     })

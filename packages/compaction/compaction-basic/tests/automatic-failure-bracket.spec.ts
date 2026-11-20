@@ -87,7 +87,7 @@ describe('automatic compaction failure bracket', () => {
     const owner = { session, options: { provider: MODEL, model: MODEL } } as Agent
 
     await expect(agentEvents(ctx, owner).waterfall(
-      'agent/pre-step', { messages: [], turn: 5, step: 1, signal: SIGNAL },
+      'agent/pre-step', { modelSelection: { provider: MODEL, model: MODEL }, messages: [], turn: 5, step: 1, signal: SIGNAL },
       () => Promise.resolve({ kind: 'enter' as const, messages: [] }),
     )).resolves.toEqual({ kind: 'enter', messages: [] })
 

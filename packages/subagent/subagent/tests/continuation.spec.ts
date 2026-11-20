@@ -3189,8 +3189,7 @@ describe('continuable settlement delivery', () => {
     expect(hasUserText(child.events, 'second task')).toBe(false)
     // The failure that ended the turn reaches the parent as the run diagnostic.
     expect(settlementNotices(parent)[0]!.text).toBe(
-      `Background subagent ${started.name} failed before it finished.\nIts closing message:\nthe answer
-UNKNOWN: ENOSPC: no space left on device`,
+      `Background subagent ${started.name} failed before it finished.\nIts closing message:\nthe answer\nUNKNOWN: ENOSPC: no space left on device`,
     )
   })
 
@@ -4337,7 +4336,7 @@ describe('per-message limits', () => {
     await vi.waitFor(() => { expect(adapter.requests).toHaveLength(1) })
     // Accepted while the first message's work is still running: restarting the
     // budget now would charge that remaining work to this message.
-    await queuePrompt(ctx, parent, started.childId, message('second task'))
+    await queuePrompt(ctx, started.childId, message('second task'))
     releaseFirst.resolve(undefined)
     await waitNoActivation(ctx, started.childId)
     await vi.waitFor(() => { expect(ends).toHaveLength(1) })
@@ -4365,7 +4364,7 @@ describe('per-message limits', () => {
 
     // The resumed Activation consults no provider, yet the limits apply afresh:
     // two more steps run, and the third is refused.
-    await queuePrompt(ctx, parent, started.childId, message('second task'))
+    await queuePrompt(ctx, started.childId, message('second task'))
     await waitNoActivation(ctx, started.childId)
     await vi.waitFor(() => { expect(ends).toHaveLength(2) })
     expect(ends[1]!.stopReason).toBe('error')
@@ -4393,7 +4392,7 @@ describe('per-message limits', () => {
     const started = await ctx.subagents.startActivation({ ...startSpec(parent, 'bounded'), delivery: 'caller' })
     try {
       await vi.waitFor(() => { expect(requestsFor(adapter, started.childId)).toHaveLength(1) })
-      ctx.subagents.interrupt(started.childId, { kind: 'user', parentSessionId: parent.id })
+      ctx.subagents.interrupt(started.childId, { kind: 'user' })
       // The tool keeps running past both limits after the interrupt.
       const result = await started.result
       expect(result.stopReason).toBe('aborted')
@@ -4413,7 +4412,7 @@ describe('per-message limits', () => {
     try {
       await vi.waitFor(() => { expect(requestsFor(adapter, started.childId)).toHaveLength(1) })
       // A queued message waits for the next turn; a steered one for the next step.
-      await humanPrompt(ctx, parent, started.childId, 'second task', delivery)
+      await humanPrompt(ctx, started.childId, 'second task', delivery)
       await expect(started.result).resolves.toMatchObject({
         stopReason: 'error',
         diagnostic: 'child stopped at its 100ms deadline; 1 queued message was discarded unread',
@@ -4487,7 +4486,7 @@ describe('per-message limits', () => {
     ctx.agents.get(started.childId)!.followup(createUserMessage({ source: { kind: 'user' }, content: message('more') }))
     releaseFirst.resolve(undefined)
     await secondStep.promise
-    ctx.subagents.interrupt(started.childId, { kind: 'user', parentSessionId: parent.id })
+    ctx.subagents.interrupt(started.childId, { kind: 'user' })
     await waitNoActivation(ctx, started.childId)
     await vi.waitFor(() => { expect(ends).toHaveLength(1) })
     expect(ends[0]!.stopReason).toBe('aborted')
@@ -4508,7 +4507,7 @@ describe('per-message limits', () => {
     ctx.on('subagent/end', (info) => { ends.push(info) })
     const started = await ctx.subagents.startActivation({ ...startSpec(parent, 'bounded'), delivery: 'parent' })
     await vi.waitFor(() => { expect(adapter.requests).toHaveLength(1) })
-    const queuedId = await queuePrompt(ctx, parent, started.childId, message('second task'))
+    const queuedId = await queuePrompt(ctx, started.childId, message('second task'))
     const child = ctx.agents.get(started.childId)!
     const queued = child.inbox.nextTurn.find(item => item.id === queuedId)!
     // Editing a queued item re-inserts it under the same id.
