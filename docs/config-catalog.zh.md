@@ -264,7 +264,7 @@ export interface Config {
 ## `@deepseek-ai/dsh-api-session-controller`
 
 - `inject`: `agentDefaultModel` · `agents` · `attachments` · `fileUploads` · `fs` · `llm` · `remoteAccess` · `sessions` · `sessionProjections` · `sessionQuery` · `typert` · `typertGateway` · `workspaceRegistry`
-- `source`: [`packages/api/session-controller/src/index.ts:110`](../packages/api/session-controller/src/index.ts)
+- `source`: [`packages/api/session-controller/src/index.ts:112`](../packages/api/session-controller/src/index.ts)
 
 ```ts config-catalog
 /** Session Controller deployment policy. */
@@ -783,7 +783,7 @@ export interface Config {
 ## `@deepseek-ai/dsh-compaction-basic`
 
 - `inject`: `llm` · `tokenMeter` · `sessions`
-- `source`: [`packages/compaction/compaction-basic/src/types.ts:46`](../packages/compaction/compaction-basic/src/types.ts)
+- `source`: [`packages/compaction/compaction-basic/src/types.ts:52`](../packages/compaction/compaction-basic/src/types.ts)
 
 ```ts config-catalog
 /** Basic compaction configuration with an optional exact-target policy table. */
@@ -814,6 +814,12 @@ export interface CompactionPolicyConfig {
   compactionRetries?: number
   /** Maximum retries after canonical context overflow; `0` disables recovery. Defaults to `1`. */
   maxOverflowRetries?: number
+  /**
+   * The route's prompt cache only survives a request that purely extends the previous one
+   * (a recurrent-state server such as ninfer). Pressure then never trims tool results on
+   * its own, and the summary request replays the whole last prompt. Defaults to `false`.
+   */
+  appendOnly?: boolean
 }
 
 /** Exact provider/model override merged over the default compaction policy. */
@@ -2046,8 +2052,8 @@ export interface Config extends ProtocolConfig, ModelListingConfig {
 ## `@deepseek-ai/dsh-llm-pi-ai`
 
 - `inject`: `llm`
-- `refs`: `Api` (`@earendil-works/pi-ai`) · `CacheRetention` (`@earendil-works/pi-ai`) · `Model` (`@earendil-works/pi-ai`) · `ModelThinkingLevel` (`@earendil-works/pi-ai`) · `OpenAICompletionsCompat` (`@earendil-works/pi-ai`) · [`RetryPolicyConfig`](../packages/llm/llm/src/index.ts) · `ThinkingBudgets` (`@earendil-works/pi-ai`) · `Transport` (`@earendil-works/pi-ai`) · `Volatile` (`@deepseek-ai/cordis`)
-- `source`: [`packages/llm/llm-pi-ai/src/config.ts:251`](../packages/llm/llm-pi-ai/src/config.ts)
+- `refs`: `Api` (`@earendil-works/pi-ai`) · `CacheRetention` (`@earendil-works/pi-ai`) · `Model` (`@earendil-works/pi-ai`) · `ModelThinkingLevel` (`@earendil-works/pi-ai`) · `OpenAICompletionsCompat` (`@earendil-works/pi-ai`) · [`PromptCacheReuse`](../packages/llm/llm/src/index.ts) · [`RetryPolicyConfig`](../packages/llm/llm/src/index.ts) · `ThinkingBudgets` (`@earendil-works/pi-ai`) · `Transport` (`@earendil-works/pi-ai`) · `Volatile` (`@deepseek-ai/cordis`)
+- `source`: [`packages/llm/llm-pi-ai/src/config.ts:262`](../packages/llm/llm-pi-ai/src/config.ts)
 
 ```ts config-catalog
 /** Plugin configuration: the provider routes this instance owns. */
@@ -2128,6 +2134,17 @@ export interface PiAiProviderProfile {
   thinkingBudgets?: ThinkingBudgets
   /** Prompt-cache retention preference. */
   cacheRetention?: CacheRetention
+  /**
+   * Send top-level `preserve_thinking: true` on OpenAI Chat Completions requests, so a
+   * server whose template drops earlier turns' thinking (such as Qwen on ninfer) keeps it
+   * and each request stays a pure append of the last. Costs prompt tokens for kept thinking.
+   */
+  preserveThinking?: boolean
+  /**
+   * How this route's server reuses its prompt cache, declared on every model's info.
+   * `append-only` (such as ninfer) makes compaction keep requests pure appends.
+   */
+  promptCache?: PromptCacheReuse
   /** Streaming transport preference. */
   transport?: Transport
   /** HTTP/provider SDK timeout in milliseconds. */
@@ -2334,7 +2351,7 @@ export type PiAiThinkingTokenBudgetField = NonNullable<OpenAICompletionsCompat['
 
 - `inject`: `llm`
 - `refs`: [`LlmModelBadge`](../packages/llm/llm/src/index.ts) · [`ModelModality`](../packages/llm/llm/src/index.ts) · [`RetryPolicyConfig`](../packages/llm/llm/src/index.ts) · [`SystemPromptUpdate`](../packages/llm/llm/src/index.ts) · [`ToolUpdate`](../packages/llm/llm/src/index.ts)
-- `source`: [`packages/test-support/llm-replay/src/index.ts:1115`](../packages/test-support/llm-replay/src/index.ts)
+- `source`: [`packages/test-support/llm-replay/src/index.ts:1122`](../packages/test-support/llm-replay/src/index.ts)
 
 ```ts config-catalog
 /** Plugin config: the {@link ReplayConfig} inputs, each defaulting to its `DSH_SNAPSHOT_*` env var in `apply`. */
@@ -3737,7 +3754,7 @@ export type JournalMode = 'wal' | 'delete' | 'truncate' | 'persist'
 
 - `inject`: `workingDirectory` · `sessionProjections`
 - `refs`: `Volatile` (`@deepseek-ai/cordis`)
-- `source`: [`packages/subagent/subagent/src/index.ts:186`](../packages/subagent/subagent/src/index.ts)
+- `source`: [`packages/subagent/subagent/src/index.ts:188`](../packages/subagent/subagent/src/index.ts)
 
 ```ts config-catalog
 /** Host configuration for continuable subagent capacity. */
@@ -3920,13 +3937,22 @@ export interface Config {
 ## `@deepseek-ai/dsh-subagent-fork-in-process`
 
 - `inject`: `subagents`
-- `source`: [`packages/subagent/subagent-fork-in-process/src/index.ts:29`](../packages/subagent/subagent-fork-in-process/src/index.ts)
+- `source`: [`packages/subagent/subagent-fork-in-process/src/index.ts:31`](../packages/subagent/subagent-fork-in-process/src/index.ts)
 
 ```ts config-catalog
 /** Config: the registry name to register the provider under. */
 export interface Config {
   /** Provider name on `ctx.subagents` (default `fork`). */
   providerName: string
+  /** Most model steps one child may enter after each parent message; omit for no step cap. */
+  maxSteps?: number
+  /**
+   * Running milliseconds one child may spend after each parent message before it
+   * is stopped; idle time does not count. Omit for no deadline.
+   */
+  deadlineMs?: number
+  /** Running milliseconds one child may go without starting a model step before it is stopped; omit for no stall limit. */
+  stallMs?: number
 }
 ```
 <!-- END GENERATED config-catalog:@deepseek-ai/dsh-subagent-fork-in-process -->
@@ -3937,13 +3963,22 @@ export interface Config {
 ## `@deepseek-ai/dsh-subagent-spawn-in-process`
 
 - `inject`: `subagents`
-- `source`: [`packages/subagent/subagent-spawn-in-process/src/index.ts:23`](../packages/subagent/subagent-spawn-in-process/src/index.ts)
+- `source`: [`packages/subagent/subagent-spawn-in-process/src/index.ts:25`](../packages/subagent/subagent-spawn-in-process/src/index.ts)
 
 ```ts config-catalog
 /** Config: the registry name to register the provider under. */
 export interface Config {
   /** Provider name on `ctx.subagents` (default `spawn`). */
   providerName: string
+  /** Most model steps one child may enter after each parent message; omit for no step cap. */
+  maxSteps?: number
+  /**
+   * Running milliseconds one child may spend after each parent message before it
+   * is stopped; idle time does not count. Omit for no deadline.
+   */
+  deadlineMs?: number
+  /** Running milliseconds one child may go without starting a model step before it is stopped; omit for no stall limit. */
+  stallMs?: number
 }
 ```
 <!-- END GENERATED config-catalog:@deepseek-ai/dsh-subagent-spawn-in-process -->
