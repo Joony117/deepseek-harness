@@ -1,0 +1,228 @@
+# dsh-v0.2.2-rc.5 pristine (9c2670d3bc) test failures, 3 full runs, 2026-11-20 (lq-ki7n). [runs] identity; identity = repo-relative file > full test name.
+[1,2,3] apps/desktop/tests/cua-optional-package.spec.ts > fetches the macOS optional tarball only for Darwin, with an empty cache for every target
+[1,2,3] apps/desktop/tests/pack-local-packages.spec.ts > packs local client artifacts without a release publication record
+[1,2,3] apps/desktop/tests/pack-local-packages.spec.ts > validates local tarball contents before reporting success
+[1,2,3] apps/desktop/tests/prepare-package-set.spec.ts > copies no macOS tarball into the Windows package set
+[2,3] apps/desktop/tests/windows-cli-signals.spec.ts > Windows Electron console signals delivers SIGINT before process exit
+[1,2,3] apps/plugin-market-generator/tests/git.spec.ts > lists Git versions from release tags and the default branch by reading objects
+[1,2,3] packages/api/session-controller/tests/media-references.host.spec.ts > SessionMediaReferences /api/file reads files and symlink targets outside the default cwd without a workspace registry
+[1,2,3] packages/api/workspace-files/tests/list.spec.ts > workspaceFiles.list — the happy path reports a symlink child as what it points to, and a dangling one as other
+[1,2,3] packages/api/workspace-files/tests/read-all.spec.ts > workspaceFiles.readBytes — base file rejects a related symlink rather than following it
+[1,2,3] packages/api/workspace-files/tests/read.spec.ts > workspaceFiles.read — read access and file kinds rejects a symlink even when it points back inside the workspace
+[1,2,3] packages/api/workspace-files/tests/read.spec.ts > workspaceFiles.read — read access and file kinds rejects a symlink that points out of the workspace — the case a prefix test cannot see
+[1,2,3] packages/api/workspace-files/tests/stat.spec.ts > workspaceFiles.stat accepts outside files and refuses symlinks, directories, missing and empty paths
+[1,2,3] packages/boot/app-boot/tests/compatibility-preflight.spec.ts > manifest resolution refuses a row whose a module path that loops cannot be read
+[1,2,3] packages/boot/app-boot/tests/package-meta.spec.ts > plugin locale display metadata refuses a export icon file symlink owned by another package
+[1,2,3] packages/boot/app-boot/tests/package-meta.spec.ts > plugin locale display metadata refuses a manifest icon file symlink owned by another package
+[1,2,3] packages/boot/app-boot/tests/profile-resolution.spec.ts > runtime resolution excludes profile symlinks to files from linked roots
+[1,2,3] packages/boot/hmr/tests/package-manifest.spec.ts > package manifest reader parity continues to the enclosing scope after the manifest is deleted
+[1,2,3] packages/boot/hmr/tests/package-reload.spec.ts > finds the host module graph through a process entry given as a link path
+[1,2,3] packages/boot/plugin-manager/tests/manager.spec.ts > offers approval for a real git-hosted package pnpm refused to prepare
+[1,2,3] packages/boot/plugin-market/tests/repository-cache.spec.ts > deletes least recently used repositories beyond the cache size and stale staging directories
+[1,2,3] packages/boot/plugin-market/tests/repository-cache.spec.ts > refuses a repository that a completed fetch left past its limit
+[1,2,3] packages/boot/plugin-market/tests/repository-cache.spec.ts > reports an SSH retry that cannot connect as a network failure, and does not retry an https URL that cannot connect
+[1] packages/boot/plugin-market/tests/repository-cache.spec.ts > reports an unreachable host as a network failure, a failed local command as a plain error, and a missing Git
+[1,2,3] packages/client/ui-deliverables/tests/present-open.host.spec.ts > Presented workspace file native open route opens external regular files through absolute and relative paths but refuses final symlinks
+[1,2,3] packages/client/ui-sidebar-documentpreview/tests/document-preview-license-bundle.client.spec.ts > published document preview licenses keeps bundled licenses in the packed lazy chunks
+[1,2,3] packages/context/agent-instructions/tests/agent-instructions.spec.ts > dynamic nested workspace context injection removes a previously loaded instruction file once it resolves to a directory through a symlink
+[1,2,3] packages/context/agent-instructions/tests/agent-instructions.spec.ts > workspace context instruction discovery follows a symlinked instruction file through ctx.fs to its target content
+[1,2,3] packages/context/agent-instructions/tests/agent-instructions.spec.ts > workspace context instruction discovery follows a symlinked instruction file to its target content
+[1,2,3] packages/deliverables/tool-present/tests/present.spec.ts > present rejects missing, non-file, empty, and excessive inputs
+[1,2,3] packages/deliverables/tool-present/tests/present.spec.ts > refuses a final symlink to an ordinary file
+[1,2,3] packages/deliverables/workspace-changes/tests/paths.spec.ts > canonicalPath resolves a missing file through the nearest existing ancestor, so its spelling is stable before and after creation
+[1,2,3] packages/deliverables/workspace-changes/tests/plugin.spec.ts > workspace-changes in a repository records inside the turn when the agent stops, and again after turn/end only when tools settled later
+[1,2,3] packages/deliverables/workspace-changes/tests/plugin.spec.ts > workspace-changes in a repository serves each listed file’s comparison from the snapshots or the captured copies
+[1,2,3] packages/experimental/claude-code-mods/tests/host-ops.spec.ts > files through the filesystem seam resolves against the session cwd or the filesystem cwd, enforces the size limits, and reports links
+[1,2,3] packages/experimental/claude-code-mods/tests/host-ops.spec.ts > the committed directory owner moves session cwd, relative files and new processes while retaining the project root
+[1] packages/experimental/client-ui-forge/tests/controller.host.spec.ts > forgePanel actions publishes nothing when a reinspection and a sign-in probe find what the panel already shows
+[1] packages/experimental/client-ui-forge/tests/controller.host.spec.ts > forgePanel actions settles a refresh once both its inspection and its sign-in probe have ended
+[1] packages/experimental/client-ui-forge/tests/controller.host.spec.ts > forgePanel change request diffs downloads a diff once per head commit and base branch for every Session, keeping no failed read
+[1,2,3] packages/experimental/client-ui-forge/tests/controller.host.spec.ts > forgePanel leaving a worktree moves the Session from its removed worktree to the source checkout inside the wait of the message that waits for it
+[1,2,3] packages/experimental/client-ui-forge/tests/controller.host.spec.ts > forgePanel local changes compares the branch scope with a chosen base branch and lists the branches it can choose
+[1,2,3] packages/experimental/client-ui-forge/tests/controller.host.spec.ts > forgePanel local changes lists more refs than other Git output may print, up to maxDiffBytes
+[1,2,3] packages/experimental/client-ui-forge/tests/controller.host.spec.ts > forgePanel local changes lists the commits of the branch scope and reads chosen ones
+[1,2,3] packages/experimental/client-ui-forge/tests/controller.host.spec.ts > forgePanel local changes measures the branch scope at each inspection
+[1,2,3] packages/experimental/client-ui-forge/tests/controller.host.spec.ts > forgePanel local changes reads the changes of a scope and the new side of a file
+[1,2] packages/experimental/client-ui-forge/tests/controller.host.spec.ts > forgePanel local changes reports a directory outside a checkout, a branch without a fork point, and a diff over the limit
+[1,2,3] packages/experimental/client-ui-forge/tests/controller.host.spec.ts > forgePanel local changes reports filter configuration overflow separately and recovers after it is reduced
+[1,2,3] packages/experimental/client-ui-forge/tests/controller.host.spec.ts > forgePanel removed worktrees checks once for all the messages that wait, publishing the answer once
+[1,2,3] packages/experimental/client-ui-forge/tests/controller.host.spec.ts > forgePanel removed worktrees finds a removed worktree on inspection, and lets messages go on without offering restoration while Git cannot answer
+[1,2,3] packages/experimental/client-ui-forge/tests/controller.host.spec.ts > forgePanel removed worktrees keeps the message waiting when a restoration inside its wait fails or is aborted, and lets it go on once one succeeds
+[1,2,3] packages/experimental/client-ui-forge/tests/controller.host.spec.ts > forgePanel removed worktrees lets the message go on, without publishing the answer, when the Session moved out of the worktree during the check
+[1,2,3] packages/experimental/client-ui-forge/tests/controller.host.spec.ts > forgePanel removed worktrees shows a removed worktree whose branch is gone, and creates the branch again at its base commit
+[1,2,3] packages/experimental/client-ui-forge/tests/controller.host.spec.ts > forgePanel removed worktrees shows a removed worktree whose branch remains, and holds the next message until the branch is checked out again
+[1] packages/experimental/client-ui-forge/tests/controller.host.spec.ts > forgePanel removed worktrees stops a restoration when the caller aborts
+[1,2,3] packages/experimental/client-ui-forge/tests/controller.host.spec.ts > forgePanel worktree creation while a message waits creates the requested worktree as Agent maintenance while the first message waits in the inbox, showing each step, then starts its turn
+[3] packages/experimental/client-ui-forge/tests/controller.host.spec.ts > forgePanel worktree creation while a message waits ends the wait and drops the waiting messages when the Agent is cancelled
+[1,2,3] packages/experimental/client-ui-forge/tests/controller.host.spec.ts > forgePanel worktree creation while a message waits keeps the message waiting with the failure the panel shows, and tries again with a new branch when asked
+[2] packages/experimental/client-ui-forge/tests/controller.host.spec.ts > forgePanel worktree creation while a message waits stops the running attempt, and the message keeps waiting with the request open until another attempt
+[1,2,3] packages/experimental/client-ui-forge/tests/controller.host.spec.ts > forgePanel worktree requests follows the Session into the worktree created at its first step
+[1,3] packages/experimental/client-ui-forge/tests/controller.host.spec.ts > forgePanel.follow binds the open change requests of the upstream branch once per remote and branch, and looks again on refresh
+[1,2,3] packages/experimental/client-ui-forge/tests/controller.host.spec.ts > worktree recovery and unload keeps a failed restoration blocked after the panel reloads, despite its leftover directory
+[2] packages/experimental/client-ui-forge/tests/git.host.spec.ts > Session permissions for Git inspection uses workspace-write for checkout and branch reads without changing the index
+[2,3] packages/experimental/client-ui-forge/tests/local-diff-safety.host.spec.ts > diff helper restrictions ignores dirty submodule files and helpers while retaining submodule commit changes
+[2] packages/experimental/client-ui-forge/tests/local-diff-safety.host.spec.ts > diff helper restrictions shows raw materialized LFS text even when its configured conversion matches the stored pointer
+[1,3] packages/experimental/client-ui-forge/tests/local-diff.host.spec.ts > baseBranches lists the automatic fork point, remote-tracking branches without symbolic refs, and local branches but the checked-out one
+[3] packages/experimental/client-ui-forge/tests/local-diff.host.spec.ts > localDiff lists at most maxUntrackedFiles untracked files, marking binary and oversized ones and skipping unreadable ones
+[3] packages/experimental/client-ui-forge/tests/local-diff.host.spec.ts > localDiff reports a patch over maxDiffBytes
+[1,3] packages/experimental/client-ui-forge/tests/local-diff.host.spec.ts > review layers classifies files by the globs and the root .gitattributes of the working tree, or of the index for the staged scope
+[1] packages/experimental/client-ui-forge/tests/local-diff.host.spec.ts > review layers reads no attributes for a staged scope without .gitattributes and stops at an unreadable working tree file
+[1,2,3] packages/experimental/creation-recommendations/tests/generated-bundle.spec.ts > admits new package rows and its exports, rejecting edits, duplicates, foreign rows and escaping files
+[1,2,3] packages/experimental/creation-recommendations/tests/generated-bundle.spec.ts > keeps an internal relative runtime link usable after copying and deleting the workspace source
+[1,2,3] packages/experimental/creation-recommendations/tests/loader-composition.spec.ts > validates and installs through pnpm/HMR: portable-bundle
+[1,2,3] packages/experimental/liveshare/tests/readonly-fork-tool-execution.spec.ts > fork child tool execution allows a real read inside the granted workspace and returns the file
+[1,2,3] packages/experimental/liveshare/tests/readonly-fork-tool-execution.spec.ts > fork child tool execution confines glob to the granted workspace and supplies its default root
+[1,2,3] packages/experimental/liveshare/tests/readonly-fork-tool-execution.spec.ts > fork child tool execution confines grep to the granted workspace and supplies its default root
+[1,2,3] packages/experimental/liveshare/tests/readonly-fork-tool-execution.spec.ts > fork child tool execution confines image reads and deliveries, and admits the tools with no file effect
+[1,2,3] packages/experimental/liveshare/tests/readonly-fork-tool-execution.spec.ts > fork child tool execution denies writes after the current share is narrowed and denies every tool after revocation
+[1,2,3] packages/experimental/liveshare/tests/readonly-fork-tool-execution.spec.ts > fork child tool execution edits inside the granted workspace through the bounded edit and refuses everything outside it
+[1,2,3] packages/experimental/liveshare/tests/readonly-fork-tool-execution.spec.ts > fork child tool execution keeps the authorized root when the directory above the grant is replaced
+[1,2,3] packages/experimental/liveshare/tests/readonly-fork-tool-execution.spec.ts > fork child tool execution keeps the authorized target when a link inside the grant is repointed before dispatch
+[1,2,3] packages/experimental/liveshare/tests/readonly-fork-tool-execution.spec.ts > fork child tool execution leaves an owner-started turn on the deployment’s own tools
+[1,2,3] packages/experimental/liveshare/tests/readonly-fork-tool-execution.spec.ts > fork child tool execution opens the prompt and cancel gate only while this child’s guard is live
+[1,2,3] packages/experimental/liveshare/tests/readonly-fork-tool-execution.spec.ts > fork child tool execution preserves read-before-write observations for a writable child
+[1,2,3] packages/experimental/liveshare/tests/readonly-fork-tool-execution.spec.ts > fork child tool execution refuses a permitted name the child tries to register for itself
+[1,2,3] packages/experimental/liveshare/tests/readonly-fork-tool-execution.spec.ts > fork child tool execution refuses a relative path that leaves the grant and accepts one that stays inside it
+[1,2,3] packages/experimental/liveshare/tests/readonly-fork-tool-execution.spec.ts > fork child tool execution refuses a search root that is a link out of the grant
+[1,2,3] packages/experimental/liveshare/tests/readonly-fork-tool-execution.spec.ts > fork child tool execution refuses an outside path and a symlink escape without running the tool body
+[1,2,3] packages/experimental/liveshare/tests/readonly-fork-tool-execution.spec.ts > fork child tool execution refuses every capability the shared surface does not name
+[1,2,3] packages/experimental/liveshare/tests/readonly-fork-tool-execution.spec.ts > fork child tool execution refuses the shipped write and edit tools and leaves the workspace unchanged
+[1,2,3] packages/experimental/liveshare/tests/readonly-fork-tool-execution.spec.ts > fork child tool execution refuses write and edit on a view-tier shared Session
+[1,2,3] packages/experimental/liveshare/tests/readonly-fork-tool-execution.spec.ts > fork child tool execution reinstalls a released limit on the same child without retaining an obsolete denial
+[1,2,3] packages/experimental/liveshare/tests/readonly-fork-tool-execution.spec.ts > fork child tool execution sandboxes a viewer-started turn while its layer is mounted
+[1,2,3] packages/experimental/liveshare/tests/readonly-fork-tool-execution.spec.ts > fork child tool execution shadows the read a preset scope registered when the child sits beneath it
+[1,2,3] packages/experimental/liveshare/tests/readonly-fork-tool-execution.spec.ts > fork child tool execution would read the repointed file if nothing confined what the tool opens
+[1,2,3] packages/experimental/liveshare/tests/readonly-fork-tool-execution.spec.ts > fork child tool execution writes inside the granted workspace and refuses everything outside it
+[1,2,3] packages/experimental/liveshare/tests/source-write-observation.spec.ts > bounded write under the observation policy claims no absence once a granted parent is replaced by a link to an outside directory
+[3] packages/experimental/worktree/tests/archive.spec.ts > archive-triggered worktree cleanup cancels an unadmitted removal on unarchive and waits for an admitted one
+[1,2] packages/experimental/worktree/tests/archive.spec.ts > archive-triggered worktree cleanup does not wait for the archived Session's own stopping work
+[1,2,3] packages/experimental/worktree/tests/archive.spec.ts > archive-triggered worktree cleanup holds directory entry into a checkout being removed and leaves other paths alone
+[2,3] packages/experimental/worktree/tests/archive.spec.ts > archive-triggered worktree cleanup registers no attempt while retainOnArchive is set, and resumes once it is cleared
+[1] packages/experimental/worktree/tests/archive.spec.ts > archive-triggered worktree cleanup registers nothing for a cold Session without creations and ignores an unarchive without an attempt
+[1,2,3] packages/experimental/worktree/tests/archive.spec.ts > archive-triggered worktree cleanup removes a clean checkout when the worktree listing exceeds maxOutputBytes
+[1,2,3] packages/experimental/worktree/tests/archive.spec.ts > archive-triggered worktree cleanup removes a clean checkout whose file listing exceeds maxOutputBytes
+[1,2,3] packages/experimental/worktree/tests/archive.spec.ts > archive-triggered worktree cleanup removes a persisted checkout without loading its Agent, reading cold Sessions from the projection cache when present
+[1,2,3] packages/experimental/worktree/tests/archive.spec.ts > archive-triggered worktree cleanup removes the checkout after the Session moved elsewhere, and the ordinary ensure contract holds afterwards
+[1,2,3] packages/experimental/worktree/tests/archive.spec.ts > archive-triggered worktree cleanup removes the clean checkout the archived Session created and keeps its branch and commits
+[1] packages/experimental/worktree/tests/archive.spec.ts > archive-triggered worktree cleanup retains a checkout for a borrower that appeared between the eligible inspection and the locked recheck
+[1,3] packages/experimental/worktree/tests/archive.spec.ts > archive-triggered worktree cleanup retains a checkout whose status output exceeds maxOutputBytes instead of failing
+[1,2,3] packages/experimental/worktree/tests/archive.spec.ts > archive-triggered worktree cleanup retains an untracked file but not ignored files
+[1,2,3] packages/experimental/worktree/tests/archive.spec.ts > archive-triggered worktree cleanup returns from admission before the inspection runs
+[1,3] packages/experimental/worktree/tests/archive.spec.ts > archive-triggered worktree cleanup treats a cached cold Session that recorded no directory as working nowhere
+[2,3] packages/experimental/worktree/tests/archive.spec.ts > archive-triggered worktree cleanup treats a subagent child beneath the archived Session as archived
+[1,2,3] packages/experimental/worktree/tests/checkout-safety.spec.ts > worktree checkout Git configuration restores a removed checkout without running its required smudge filter
+[3] packages/experimental/worktree/tests/removal.spec.ts > safe worktree removal leaves a committed embedded repository to Git, which refuses the removal
+[3] packages/experimental/worktree/tests/removal.spec.ts > safe worktree removal removes a checkout whose submodule was never initialized there, as Git does
+[1,2,3] packages/experimental/worktree/tests/removal.spec.ts > safe worktree removal restores over the identity checks removal shares, rejecting a target outside the pool
+[3] packages/experimental/worktree/tests/removal.spec.ts > safe worktree removal retains a checkout holding a submodule repository, which Git refuses to remove
+[2] packages/experimental/worktree/tests/worktree.spec.ts > does not remove a registration when its directory reappears during restoration validation
+[3] packages/experimental/worktree/tests/worktree.spec.ts > restoration validation preserves a locked missing worktree registration
+[1,2,3] packages/experimental/worktree/tests/worktree.spec.ts > restoring removed worktrees checks the branch out again at its latest commit after removing only its stale registration, without entering the checkout
+[1,2,3] packages/experimental/worktree/tests/worktree.spec.ts > restoring removed worktrees creates a deleted branch again at its base commit, without the commits it had gained
+[1,2,3] packages/experimental/worktree/tests/worktree.spec.ts > restoring removed worktrees finds the stale registration when the worktree listing exceeds maxOutputBytes
+[1,2,3] packages/experimental/worktree/tests/worktree.spec.ts > restoring removed worktrees retains cancellation reason Error: caller stopped when restoration is cancelled before its allocation starts
+[1,2] packages/experimental/worktree/tests/worktree.spec.ts > restoring removed worktrees retains cancellation reason caller stopped when restoration is cancelled before its allocation starts
+[1,2,3] packages/fs/fs-local/tests/filesystem.spec.ts > listDir lists files and directories in stable name order with resolved child targets
+[1,2,3] packages/fs/fs-local/tests/filesystem.spec.ts > lstat reports path metadata without following the final symlink component
+[1,2,3] packages/fs/fs-local/tests/filesystem.spec.ts > symlink targetKey identity a stale change is detected across both paths
+[1,2,3] packages/fs/fs-local/tests/filesystem.spec.ts > symlink targetKey identity two paths to the same file via a symlink share one version and write the real target
+[1,2,3] packages/fs/fs-local/tests/filesystem.spec.ts > writeText createIfAbsent rejects and preserves a dangling symbolic link
+[1,2,3] packages/fs/fs-local/tests/fsio.spec.ts > Node errno classification classifies metadata, resolution, and read faults on a symlink loop
+[1,2,3] packages/fs/fs-local/tests/fsio.spec.ts > listDirectory derives child target keys from the listed parent identity
+[1,2,3] packages/fs/fs-local/tests/fsio.spec.ts > listDirectory lists direct children in stable order without reading content
+[1,2,3] packages/fs/fs-local/tests/fsio.spec.ts > listDirectory translates child permission failures into FS_PERMISSION_DENIED
+[1,2,3] packages/fs/fs-local/tests/fsio.spec.ts > listDirectory translates child resolution failures into structured listing errors
+[1,2,3] packages/fs/fs-local/tests/fsio.spec.ts > listDirectory translates preflight metadata IO failures into FS_IO_ERROR
+[1,2,3] packages/fs/fs-local/tests/fsio.spec.ts > probeNoFollow reports symlinks without following them
+[1,2,3] packages/fs/fs-local/tests/fsio.spec.ts > resolveLocalTarget keeps the key stable across create when an ancestor is a symlink
+[1,2,3] packages/fs/fs-local/tests/fsio.spec.ts > resolveLocalTarget two paths to the same file via a symlink share one targetKey
+[1,2,3] packages/fs/fs-sandbox/tests/containment.spec.ts > filesystem sandbox containment classifies an ancestor inspection fault as a filesystem error
+[1,2,3] packages/fs/fs-sandbox/tests/containment.spec.ts > filesystem sandbox containment recognizes an alias-equivalent root by filesystem identity for a missing target
+[1,2,3] packages/fs/fs-sandbox/tests/fs-sandbox.spec.ts > workspace-write containment a NEW file created under a symlinked-out directory is denied (deepest-ancestor realpath)
+[1,2,3] packages/fs/fs-sandbox/tests/fs-sandbox.spec.ts > workspace-write containment a symlinked directory inside the workspace pointing OUT is denied (canonicalized before containment)
+[1,2,3] packages/fs/fs-sandbox/tests/fs-sandbox.spec.ts > workspace-write containment rejects an extra directory replaced by a symlink to an ungranted sibling
+[1,2,3] packages/fs/tool-fs/tests/integration.spec.ts > bare provider (no dsh-fs-observation-policy) reports a host metadata fault as a typed filesystem failure
+[1,2,3] packages/lsp/lsp-stdio/tests/host.spec.ts > canonicalizeWorkspace resolves a symlinked workspace to its target so aliases share identity
+[1,2,3] packages/lsp/lsp-stdio/tests/host.spec.ts > readHostSource accepts a source reached through a symlink that stays inside the workspace
+[1,2,3] packages/lsp/lsp-stdio/tests/host.spec.ts > readHostSource rejects a source whose canonical path escapes the workspace via symlink
+[2] packages/ptc-runtime/ptc-runtime-node/tests/persistent.spec.ts > retained Node 'script' terminates after unacknowledged timeout in a synchronous loop and recreates empty state
+[1,2,3] packages/sandbox/sandbox-windows-acl/tests/probe.spec.ts > AclSandbox write restriction allows writes only in granted directories and denies the escape write
+[1,2,3] packages/sandbox/sandbox-windows-acl/tests/runner.spec.ts > windows-acl runner agentless workspace-write creates a fresh private temp per call and removes it on exit
+[1,2,3] packages/sandbox/sandbox-windows-acl/tests/runner.spec.ts > windows-acl runner cross-root delete regression: one session cannot delete inside ANOTHER granted root
+[1,2,3] packages/sandbox/sandbox-windows-acl/tests/runner.spec.ts > windows-acl runner delete-escape regression: deletes outside the granted roots are denied in BOTH modes, through every delete authority
+[1,2,3] packages/sandbox/sandbox-windows-acl/tests/runner.spec.ts > windows-acl runner mode-downgrade leak regression: a STANDING workspace grant is inert under read-only and effective again on re-upgrade
+[1,2,3] packages/sandbox/sandbox-windows-acl/tests/runner.spec.ts > windows-acl runner paired SIDs: the runner trusts caller-owned private-temp grants and materializes nothing itself
+[1,2,3] packages/sandbox/sandbox-windows-acl/tests/runner.spec.ts > windows-acl runner partial boundary: a workspace hard link lets the grant reach an external file object
+[1,2,3] packages/sandbox/sandbox-windows-acl/tests/runner.spec.ts > windows-acl runner read-only: no write-SID grants — workspace/temp writes denied, reads and $null redirection fine, CIM availability follows the caller token
+[1,2,3] packages/sandbox/sandbox-windows-acl/tests/runner.spec.ts > windows-acl runner revoking one of two grants on a directory leaves the shared Low label usable
+[1,2,3] packages/sandbox/sandbox-windows-acl/tests/runner.spec.ts > windows-acl runner temp capabilities isolate sibling sessions that share one workspace SID
+[1,2,3] packages/sandbox/sandbox-windows-acl/tests/runner.spec.ts > windows-acl runner workspace-write: Remove-Item and Rename-Item succeed in the granted workspace (DELETE + FILE_DELETE_CHILD)
+[1,2,3] packages/sandbox/sandbox-windows-acl/tests/runner.spec.ts > windows-acl runner workspace-write: the confined child writes granted directories only
+[1,2,3] packages/sandbox/sandbox/tests/roots.spec.ts > workspaceWritableRoots workspace-write deduplicates physical extra directories and rejects symlink aliases
+[2] packages/session/session-persistence-jsonl/tests/catalog-migration.spec.ts > historical catalog publication (zstd) backfills a missing catalog from descriptor v2
+[1,2,3] packages/session/session-persistence-jsonl/tests/generation.spec.ts > JSONL immutable generation publication fails loud without altering a colliding symlink target
+[1,2,3] packages/shell/pwsh-local/tests/executor.spec.ts > resolvePwshPath and candidatePwshPaths (pure, every platform) accepts a link-shaped PATH candidate whose target cannot be stat-ed
+[1,2,3] packages/skill/skill-filesystem/tests/skill-filesystem.spec.ts > FileSystemSkillProvider publishes regular-file paths for linked skills while retaining their resource roots (filesystem service: false)
+[1,2,3] packages/skill/skill-filesystem/tests/skill-filesystem.spec.ts > FileSystemSkillProvider publishes regular-file paths for linked skills while retaining their resource roots (filesystem service: true)
+[1,2,3] packages/skill/skill-filesystem/tests/skill-filesystem.spec.ts > FileSystemSkillProvider refreshes frontmatter through a followed skill symlink
+[1,2,3] packages/spill/spill-local/tests/spill-local.spec.ts > discoverDefaultRoots returns only real dsh-spill-* directories, excluding symlinks and non-matches
+[1,2,3] packages/spill/spill-local/tests/spill-local.spec.ts > startup cleanup sweep does NOT follow a symlinked session directory (no deletion in the target)
+[1,2,3] packages/spill/spill-local/tests/spill-local.spec.ts > startup cleanup sweep skips a symlink INSIDE a session dir and non-session siblings
+[1,2,3] packages/subprocess/subprocess-local/tests/native-windows.spec.ts > Windows Job native containment preserves missing-target and invalid-executable rejection errors
+[1,2,3] packages/subprocess/subprocess-local/tests/spawn-runner.spec.ts > closed runner protocol contains cleanup failures and removes a substituted symlink only
+[1,2,3] packages/subprocess/subprocess-local/tests/spawn-runner.spec.ts > runner launch inputs resolves Windows executables with target-cwd and PATH search semantics
+[1,2,3] packages/test-support/session-snapshot/tests/workspace.spec.ts > workspace snapshots captures readable text, binary bytes, links, and empty directories in path order
+[1,2,3] packages/util/atomic-write/tests/atomic-write.spec.ts > writeFileAtomic replaces a symlinked target itself without writing through to the referent
+[1,2,3] packages/util/native-command/tests/file-applications-windows.spec.ts > queries and invokes a registered Windows handler through the system Shell
+[1,2,3] packages/util/plugin-detail/tests/files.spec.ts > reads package files and README names, and refuses paths whose real location leaves the package
+[1,2,3] packages/workspace/workspace/tests/workspace.spec.ts > WorkspaceRegistry create and lookup creates newest-first and idempotently reuses a canonical path without retitling
+[1,2,3] packages/workspace/workspace/tests/workspace.spec.ts > WorkspaceRegistry lifecycle and bootstrap bootstraps once from list headers only, in workspace/session createdAt order
+[1,2,3] packages/workspace/workspace/tests/workspace.spec.ts > first-use Workspace preparation titles the Workspace after the requested directory when that path is a symlink
+[1,2,3] scripts/build-exe-for-python-sdk.spec.ts > Python runtime executable builder CLI resolves the pnpm package behind a Windows command shim
+[1,2,3] scripts/build-exe-for-python-sdk.spec.ts > Python runtime executable builder CLI runs pnpm through its JavaScript entrypoint without a command shell
+[1] scripts/compile-referenced-projects.spec.ts > internal artifact build order defers benchmark diagnostics while normal artifact builds reject the same source
+[1,2,3] scripts/dev-web.spec.ts > rebuilds a client-plugin bundle after its source changes
+[1,2,3] scripts/local-bundle-registry.spec.ts > package cache freshness installs a rebuilt archive at the same version through a retained pnpm store
+[1,2,3] scripts/local-bundle-registry.spec.ts > packed archives describes exactly the bytes it will serve
+[1,2,3] scripts/local-bundle-registry.spec.ts > packed archives rejects a bundle whose patch is missing from its archive
+[1,2,3] scripts/local-bundle-registry.spec.ts > packed archives rejects a missing archive and a package that is not a public release member
+[1,2,3] scripts/local-bundle-registry.spec.ts > packed archives rejects a packed local dependency this run does not serve at the required version
+[1,2,3] scripts/local-bundle-registry.spec.ts > packed archives rejects a packed manifest that keeps a workspace protocol
+[1,2,3] scripts/local-bundle-registry.spec.ts > packed archives rejects an archive that lacks the main it declares
+[1,2,3] scripts/local-bundle-registry.spec.ts > packed archives reports a preparation stopped by a signal as a cancellation
+[1,2,3] scripts/local-bundle-registry.spec.ts > registry HTTP answers scoped packuments, version documents, and dist tags for its own artifacts
+[1,2,3] scripts/local-bundle-registry.spec.ts > registry HTTP keeps a repository-owned miss local and redirects only external packages
+[1,2,3] scripts/local-bundle-registry.spec.ts > registry HTTP keeps serving after a client abandons a tarball request
+[1,2,3] scripts/local-bundle-registry.spec.ts > registry HTTP rejects out-of-namespace, malformed, and non-GET requests, then stops listening
+[1,2,3] scripts/local-bundle-registry.spec.ts > registry HTTP serves exactly the archived bytes, and no body for HEAD
+[1,2,3] scripts/local-bundle-registry.spec.ts > run record names the run, its membership, and the integrity of every served archive
+[1,2,3] scripts/local-bundle-registry.spec.ts > same-version iteration needs the earlier run's stale resolution cleared before a new run at the same version installs
+[2] scripts/locale-dictionary-parity.spec.ts > shipped locale dictionaries keeps bilingual keys aligned and shipped-language keys and placeholders complete
+[1] scripts/locale-dictionary-parity.spec.ts > shipped locale dictionaries registers every shipped language alongside every object-form bilingual dictionary
+[3] scripts/migrate-sessions-to-v4.spec.ts > one-time V4 migration command shows help, rejects unknown arguments, and logs a missing root failure
+[1,2,3] scripts/project-doc-site.spec.ts > publishableImage refuses a target whose real path escapes the repository
+[1,2,3] scripts/release/pack.spec.ts > release pack CLI does not broaden an empty parallel family to the whole workspace
+[1,2,3] scripts/release/pack.spec.ts > release pack CLI leaves no publish order after a pack hook fails
+[1,2,3] scripts/release/pack.spec.ts > release pack CLI overlaps two independent packs and keeps later packages within the concurrency limit
+[1,2,3] scripts/release/pack.spec.ts > release pack CLI packs only public family members and records their publish order (concurrency=1)
+[1,2,3] scripts/release/pack.spec.ts > release pack CLI packs only public family members and records their publish order (concurrency=2)
+[1,2,3] scripts/release/pack.spec.ts > release pack CLI packs only public family members and records their publish order (concurrency=undefined)
+[1,2,3] scripts/release/pack.spec.ts > release pack CLI rejects a successful command that did not produce the expected member tarball
+[1,2,3] scripts/release/pack.spec.ts > release pack CLI rejects nonexact DSH dependencies in the produced tarball before recording publication
+[1,2,3] scripts/release/pack.spec.ts > release pack CLI rejects nonexact DSH optionalDependencies in the produced tarball before recording publication
+[1,2,3] scripts/release/pack.spec.ts > release pack CLI rejects nonexact DSH peerDependencies in the produced tarball before recording publication
+[1,2,3] scripts/release/pack.spec.ts > release pack CLI stops the ready pack hook and its stalled descendant before fixture cleanup
+[1,2,3] scripts/release/pack.spec.ts > release pack CLI validates every parallel tarball before recording the publish order
+[1,2,3] scripts/repo-files.spec.ts > uniqueRepoFiles canonicalizes symlinked matches through realpath and dedupes them onto regular files
+[1,2,3] scripts/repo-files.spec.ts > uniqueRepoFiles does not follow symlinked directories under ** or wildcard-match dot names
+[1,2,3] scripts/repo-files.spec.ts > uniqueRepoFiles enumerates ** matches without probing a symlinked file as a directory
+[1,2,3] scripts/repo-files.spec.ts > uniqueRepoFiles fails loudly on a broken symlink instead of shrinking the corpus
+[1,2,3] scripts/repo-files.spec.ts > uniqueRepoFiles folds a . segment and rejects a .. segment like node glob semantics
+[1,2,3] scripts/repo-files.spec.ts > uniqueRepoFiles follows a literal segment that names a symlinked directory
+[1,2,3] scripts/repo-files.spec.ts > uniqueRepoFiles follows repeated literal symlinked directories like node glob and terminates
+[1,2,3] scripts/repo-files.spec.ts > uniqueRepoFiles lists each directory once per call when patterns and ** revisit it
+[1,2,3] scripts/repo-files.spec.ts > uniqueRepoFiles never lists a directory the caller skips and returns the unskipped result
+[1,2,3] scripts/repo-files.spec.ts > uniqueRepoFiles rejects a trailing ** segment instead of silently returning nothing
+[1,2,3] scripts/repo-files.spec.ts > uniqueRepoFiles rejects glob syntax the walker does not model instead of matching nothing
+[1,2,3] scripts/repo-files.spec.ts > uniqueRepoFiles reports a matched file canonical target for downstream existence checks
+[1,2,3] scripts/verify-application-entrypoints.spec.ts > application entrypoints accepts the repository launcher inventory
