@@ -8,7 +8,7 @@ earlier moves (rc.1 cutover, rc.3 rebase, review rounds) lives in the tracker
 | Fact | Value |
 |---|---|
 | Working branch | `codex/harness` — all local work lives here |
-| Fork base | tag `dsh-v0.2.1-rc.5` (`b830ec950faba0a46dda564be3e2d854afed94f1`) |
+| Fork base | tag `dsh-v0.2.2-rc.5` (`9c2670d3bce5275e0d1610272958121af87787bb`) |
 | Previous base | tag `dsh-v0.2.0-rc.2` (`639ed015397290b3745d163aafe02ffee4aa3f84`), branch `codex/harness-0.2.0-rc.2` (`ec401d9ab0`: `0cf41bd1cf` plus this rule change) |
 | Rollback | branch `codex/harness-0.2.0-rc.2` + the pre-swap `~/.dsh` robocopy backup taken at the rc.5 swap (step 6.2) |
 | Upstream default branch | `master` (**not** `main`) |
@@ -37,21 +37,23 @@ earlier moves (rc.1 cutover, rc.3 rebase, review rounds) lives in the tracker
 7. **No fork banner in `AGENTS.md`.** Upstream sizes it to its ceiling; W's `CLAUDE.md`
    already points readers here.
 
-## What the fork carries (over `dsh-v0.2.1-rc.5`)
+## What the fork carries (over `dsh-v0.2.2-rc.5`)
 
 | Commit | What |
 |---|---|
-| (a) session delete | `delete` on the persistence seam (JSONL backend), the session-controller `@Remote('delete')`, client `ISessions.delete`, specs |
-| (a2) delete UI | one `sidebar.workspaces.session.menu.item` (id `delete`, order 475, after upstream's `session-id` row at 450; plugin rows start at 500) + a `shell.overlay` confirm dialog; drop this commit alone to ship delete as API only |
+| (a) session delete | `delete` on the persistence seam (JSONL backend), the session-controller `@Remote('delete')`, client `ISessions.delete`, liveshare classifies `session/delete` as `owner-only`, specs |
+| (a2) delete UI | one `ctx.contextMenus` session action in `session-actions/context-menus.tsx` (id `delete`, order 475, between upstream's `id` at 450 and `archive` at 600, `danger`, shown only when `session/delete` is allowed) + a `shell.overlay` confirm dialog; drop this commit alone to ship delete as API only. Redone at 0.2.2-rc.5: upstream moved session rows from the `sidebar.workspaces.session.menu.item` slot to structured menu actions |
 | (a3, a4) delete fixtures | rc.2 test fakes gain `delete`; upstream menu tests count the delete row |
 | (b) compaction | a failed automatic compaction is recorded; the summarizer runs with thinking off. (b2) keeps upstream's rule: a pressure config error is warned, not recorded |
 | (c) CallId alias | `packages/llm/llm/src/brand.ts` |
 | (d) strict startup | `DSH_STRICT_STARTUP=1` makes every inactive Loader entry fatal in `auditStartupEntries` (rc.2 fails only for its required ids) |
 | (d2) strict preflight | under the same switch a compatibility-preflight denial throws instead of disabling the row; an `allow-version` exemption still admits it |
-| (h) retired plugin source | `ToolRunContext.deferContext` rewrites a 0.1.x `{ kind: 'plugin', plugin }` source to `{ kind: 'plugin:<name>' }`, other fields kept, as the v3→v4 migration names an unknown producer (v4 persistence refuses `plugin`; dsh-plugin-subscriptions' image_generate) |
+| (h) retired plugin source | `ToolRunContext.deferContext` (the closure in `packages/core/tools/src/pipeline.ts`; redone there at 0.2.2-rc.5) rewrites a 0.1.x `{ kind: 'plugin', plugin }` source to `{ kind: 'plugin:<name>' }`, other fields kept, as the v3→v4 migration names an unknown producer (v4 persistence refuses `plugin`; dsh-plugin-subscriptions' image_generate) |
 | (i) icon alias | ui-primitives exports `IconSparkle16 = IconSparkleRegular` for dsh-plugin-subscriptions' client half (else boot-client "did not activate"); the upstream icon-set test skips the alias |
-| (j) child limits | spawn/fork Config `maxSteps`, `deadlineMs`, `stallMs` (provider `messageLimits`). Per parent message: they restart when a turn claims a message the parent sent, and time counts only while the child runs. A hit disposes the Activation (owned children too) with `stopReason: 'error'` + diagnostic, which counts queued parent messages discarded unread; a caller stop (dispose, interrupt, archive) stays `aborted`, and no limit fires while it unwinds. `stallMs` counts time inside a tool call (e.g. a workflow tool waiting on grandchildren); only idle time is exempt. Re-read by provider name at cold resume; a resumed child whose provider is gone runs unbounded. Replaces the rc.2 in-process driver budgets (upstream removed that driver when it unified activation lifecycles) |
+| (j) child limits | spawn/fork Config `maxSteps`, `deadlineMs`, `stallMs` (provider `messageLimits`). Per parent message: they restart when a turn claims a message the parent sent, and time counts only while the child runs. A hit disposes the Activation (owned children too) with `stopReason: 'error'` + diagnostic, which counts queued parent messages discarded unread; a caller stop (dispose, interrupt, archive) stays `aborted`, and no limit fires while it unwinds. `stallMs` counts time inside a tool call (e.g. a workflow tool waiting on grandchildren); only idle time is exempt. Re-read by provider name at cold resume; a resumed child whose provider is gone runs unbounded. Redone at 0.2.2-rc.5 on upstream's rewritten `SubagentManager`: `SubagentHost.messageLimits(provider)`, `enforceMessageLimits` after the Activation's session listener, `budget.admitted` before delivery. Replaces the rc.2 in-process driver budgets (upstream removed that driver when it unified activation lifecycles) |
 | (e) this file | |
+
+Dropped at 0.2.2-rc.5: `perf(fs-search)` (sibling grep/glob in parallel); upstream 270e7c5a56 sets `isConcurrencySafe: () => true` on both tools.
 
 Generated catalogs, docs graphs and `*.i18n.yaml` records are not carried as hand edits:
 they are regenerated after a rebase (recipe step 3).
@@ -176,8 +178,8 @@ undo Windows ACL grants made on workspaces by the sandbox; account for them sepa
 
 ## Known failures at the base (not regressions)
 
-**No rc.5 baseline yet.** The list below was measured on rc.2; it is not an allowlist for an
-rc.5 fork run until three pristine `dsh-v0.2.1-rc.5` runs replace it.
+**No 0.2.2-rc.5 baseline yet.** The list below was measured on rc.2; it is not an allowlist for a
+0.2.2-rc.5 fork run until three pristine `dsh-v0.2.2-rc.5` runs replace it.
 
 **rc.2 baseline**, measured 2026-09-30 (lq-1bvo P2): pristine `dsh-v0.2.0-rc.2`
 (639ed01539), three full `pnpm run test` runs, `DSH_COVERAGE_TEST_TIMEOUT_MS` unset,
