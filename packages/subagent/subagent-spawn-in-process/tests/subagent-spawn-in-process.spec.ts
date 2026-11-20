@@ -425,8 +425,9 @@ describe('per-message limit config', () => {
   it('registers the configured limits with the provider and omits unset ones', async () => {
     const { ctx } = await setup([])
     await ctx.plugin(spawn, { providerName: 'live', maxSteps: 200, stallMs: 1_800_000 })
-    expect(ctx.subagents.getProvider('live')?.messageLimits).toEqual({ maxSteps: 200, stallMs: 1_800_000 })
-    expect(ctx.subagents.getProvider('spawn')?.messageLimits).toBeUndefined()
+    expect(ctx.subagents.getProvider('live')?.messageLimits).toMatchObject({ maxSteps: 200, stallMs: 1_800_000 })
+    const { maxSteps, deadlineMs, stallMs } = ctx.subagents.getProvider('spawn')?.messageLimits ?? {}
+    expect([maxSteps, deadlineMs, stallMs]).toEqual([undefined, undefined, undefined])
     await ctx.fiber.dispose()
   })
 

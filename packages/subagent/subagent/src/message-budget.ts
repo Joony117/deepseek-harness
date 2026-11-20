@@ -7,21 +7,6 @@ import type { MessageId } from '@deepseek-ai/dsh-llm'
 import type { SubagentMessageLimits } from './types.ts'
 
 /**
- * Build the limits a provider configured, omitting every unset field.
- * @param config - provider config carrying the optional limit fields.
- * @returns the configured limits, or undefined when none is set.
- */
-export function messageLimitsFrom(config: SubagentMessageLimits): SubagentMessageLimits | undefined {
-  const { maxSteps, deadlineMs, stallMs } = config
-  if (maxSteps === undefined && deadlineMs === undefined && stallMs === undefined) return undefined
-  return {
-    ...maxSteps === undefined ? {} : { maxSteps },
-    ...deadlineMs === undefined ? {} : { deadlineMs },
-    ...stallMs === undefined ? {} : { stallMs },
-  }
-}
-
-/**
  * Enforces one local child's {@link SubagentMessageLimits}. The step count,
  * the deadline, and the stall window restart when a turn claims a parent
  * message, so work still running for an earlier message never spends the next

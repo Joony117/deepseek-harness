@@ -18,7 +18,6 @@ import type {
   SubagentMessageLimits,
   SubagentProvider,
 } from '@deepseek-ai/dsh-subagent'
-import { messageLimitsFrom } from '@deepseek-ai/dsh-subagent'
 
 export const name = 'subagent-fork-in-process'
 // `tools` is deliberately NOT injected — same rationale as subagent-spawn-in-process: the
@@ -93,5 +92,5 @@ class ForkInProcessProvider implements SubagentProvider {
 }
 
 export function apply(ctx: Context, config: Config): void {
-  ctx.subagents.registerProvider(new ForkInProcessProvider(config.providerName, messageLimitsFrom(config)))
+  ctx.subagents.registerProvider(new ForkInProcessProvider(config.providerName, config))
 }

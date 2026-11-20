@@ -4549,9 +4549,9 @@ describe('per-message limits', () => {
     ], {})
     const started = await ctx.subagents.startActivation({ ...startSpec(parent, 'bounded'), delivery: 'caller' })
     try {
+      expect(requireLocalActivation(managerState(ctx).resident.get(started.childId)!).budget).toBeUndefined()
       await expect(started.result).resolves.toMatchObject({ stopReason: 'completed' })
       expect(requestsFor(adapter, started.childId)).toHaveLength(5)
-      expect(ctx.subagents.getProvider('bounded')?.messageLimits).toBeUndefined()
     } finally {
       await started.dispose()
       await ctx.fiber.dispose()

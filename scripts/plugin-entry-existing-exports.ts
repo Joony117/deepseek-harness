@@ -95,7 +95,8 @@ export const EXISTING_PLUGIN_ENTRY_EXPORTS = {
   '@deepseek-ai/dsh-jobs-local': ['TASK_WAIT_TIMEOUT'],
   '@deepseek-ai/dsh-llm': [
     'ACCOUNT_QUOTA_EXCEEDED_CODE', 'APP_IDENTITY', 'AssistantStreamAccumulator', 'BlockAssembler',
-    'CONTEXT_SUMMARY_MAX_CHARS', 'CONTEXT_WINDOW_EXCEEDED_CODE', 'EMPTY_RESPONSE_CODE', 'IMAGE_OFFLOAD_REQUIRED_CODE',
+    'CONTEXT_SUMMARY_MAX_CHARS', 'CONTEXT_WINDOW_EXCEEDED_CODE', 'CallId', 'EMPTY_RESPONSE_CODE',
+    'IMAGE_OFFLOAD_REQUIRED_CODE',
     'INVALID_CREDENTIAL_CODE', 'LLM_FAILURE_CODES', 'LlmAdapter', 'LlmAttemptId', 'MessageId', 'ProviderRequestId',
     'QUOTA_EXCEEDED_CODE', 'RETRY_CODE_CHOICES', 'ReasoningEffortId', 'RetryPolicySchema', 'ToolCallId',
     'assembleAssistantStream', 'assertUsableApiKey', 'assistantStreamChunks', 'assistantStreamFirstTokenTime',
@@ -199,8 +200,8 @@ export const EXISTING_PLUGIN_ENTRY_EXPORTS = {
     'SUBAGENT_DESCRIPTOR_VERSION', 'SubagentRunId', 'appendDelegatedPolicyOverrides', 'applyChildComposition',
     'assertPositiveFinite', 'assertSubagentMaxDepth', 'assertUsableCwd', 'captureDelegatedPolicyOverrides',
     'childSessionMeta', 'delegationDepthOf', 'finalAssistantOutput', 'foldSubagentDescriptor',
-    'parentAgentOptionsForDelegation', 'resolveChildAgentOptions', 'resolveChildDepth', 'settleRunResult',
-    'snapshotSubagentDescriptor', 'subprocessRunHandle',
+    'limitSubagentDiagnostic', 'parentAgentOptionsForDelegation', 'resolveChildAgentOptions', 'resolveChildDepth',
+    'settleRunResult', 'snapshotSubagentDescriptor', 'subprocessRunHandle',
   ],
   '@deepseek-ai/dsh-system-prompt': [
     'PERSONA_PREFIX_SECTION', 'PERSONA_SUFFIX_SECTION', 'TOOL_ORDER_REST', 'joinContextSections',

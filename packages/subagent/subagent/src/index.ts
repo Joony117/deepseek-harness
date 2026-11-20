@@ -110,7 +110,6 @@ export type {
   SubagentDescriptorData,
 } from './descriptor.ts'
 export { STRUCTURED_OUTPUT_TOOL } from './structured.ts'
-export { messageLimitsFrom } from './message-budget.ts'
 export { SubagentError } from './error.ts'
 export { assertSubagentMaxDepth, delegationDepthOf } from './depth.ts'
 export {

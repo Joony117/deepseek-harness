@@ -1340,7 +1340,8 @@ export class SubagentManager {
    */
   private enforceMessageLimits(activation: LocalActivation, provider: string): void {
     const limits = this.host.messageLimits(provider)
-    if (limits === undefined) return
+    if (limits === undefined
+      || (limits.maxSteps === undefined && limits.deadlineMs === undefined && limits.stallMs === undefined)) return
     const child = activation.handle.agent
     const pending = (messageId: MessageId): boolean =>
       child.inbox.nextTurn.some(message => message.id === messageId)

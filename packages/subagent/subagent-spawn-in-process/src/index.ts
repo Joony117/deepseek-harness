@@ -14,7 +14,6 @@ import type {
   SubagentMessageLimits,
   SubagentProvider,
 } from '@deepseek-ai/dsh-subagent'
-import { messageLimitsFrom } from '@deepseek-ai/dsh-subagent'
 
 export const name = 'subagent-spawn-in-process'
 // `tools` is deliberately not injected: the child factory already provides it during setup,
@@ -69,5 +68,5 @@ class SpawnInProcessProvider implements SubagentProvider {
 }
 
 export function apply(ctx: Context, config: Config): void {
-  ctx.subagents.registerProvider(new SpawnInProcessProvider(config.providerName, messageLimitsFrom(config)))
+  ctx.subagents.registerProvider(new SpawnInProcessProvider(config.providerName, config))
 }

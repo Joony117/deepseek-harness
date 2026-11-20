@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { MessageBudget, messageLimitsFrom } from '../src/message-budget.ts'
+import { MessageBudget } from '../src/message-budget.ts'
 import type { MessageId } from '@deepseek-ai/dsh-llm'
 import type { SubagentMessageLimits } from '../src/types.ts'
 
@@ -254,16 +254,5 @@ describe('MessageBudget', () => {
     vi.advanceTimersByTime(1_000)
     expect(b.stepEntered()).toBe(false)
     expect(exceeded).not.toHaveBeenCalled()
-  })
-})
-
-describe('messageLimitsFrom', () => {
-  it('keeps only configured limits', () => {
-    expect(messageLimitsFrom({ maxSteps: 200, stallMs: 1_800_000 })).toEqual({ maxSteps: 200, stallMs: 1_800_000 })
-    expect(Object.keys(messageLimitsFrom({ maxSteps: 3 }) ?? {})).toEqual(['maxSteps'])
-  })
-
-  it('returns undefined when no limit is configured', () => {
-    expect(messageLimitsFrom({})).toBeUndefined()
   })
 })
