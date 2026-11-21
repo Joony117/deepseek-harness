@@ -10,7 +10,7 @@ earlier moves (rc.1 cutover, rc.3 rebase, review rounds) lives in the tracker
 | Working branch | `codex/harness` — all local work lives here |
 | Fork base | tag `dsh-v0.2.2-rc.5` (`9c2670d3bce5275e0d1610272958121af87787bb`) |
 | Previous base | tag `dsh-v0.2.0-rc.2` (`639ed015397290b3745d163aafe02ffee4aa3f84`), branch `codex/harness-0.2.0-rc.2` (`ec401d9ab0`: `0cf41bd1cf` plus this rule change) |
-| Rollback | branch `codex/harness-0.2.0-rc.2` + the pre-swap `~/.dsh` robocopy backup taken at the rc.5 swap (step 6.2) |
+| Rollback | branch `codex/harness-0.2.0-rc.2` + the pre-swap `~/.dsh` robocopy backup `E:\staging-lq-ki7n\backups\swap-20261121-020839\dsh` (rc.5 swap, 2026-11-21); `pwsh -File E:\Qwen3.8_27b\tools\fork-upgrade\p6-swap.ps1 -Rollback -Stamp 20261121-020839` |
 | Upstream default branch | `master` (**not** `main`) |
 | `origin` | `https://github.com/deepseek-ai/deepseek-harness.git` — upstream; push URL locally set to `DISABLED-push-to-upstream-forbidden` |
 | `fork` | `https://github.com/Joony117/deepseek-harness.git` — the owner's personal fork; the only push target |
@@ -172,11 +172,15 @@ in step 6: check campaigns, stop the harness and confirm it exited, then back up
 4. Keep the old head as `codex/harness-<old-version>`; move `codex/harness` to the staged
    head in a clean live F (no untracked files either); move aside (never delete) every dir under
    `packages/*/*` and `vendor/*` with no tracked files at the new head (the other version's ignored `lib/` and
-   `node_modules` break tsdown's `packages/*/*` glob); install; then build in this order:
-   `tsc -b tsconfig.host.json --force`, `pnpm run build:native-system`, `pnpm run build:lib:host`,
-   `tsc -b tsconfig.client.json --force`, `pnpm run build`. The `--force` runs clear stale tsc -b state
-   after a version switch; the client check needs the `.d.ts` files host tsdown writes (e.g.
-   `@deepseek-ai/dsh-office-to-pdf/remote`), so it fails if run before `build:lib:host` (lq-1bvo P5 live swap).
+   `node_modules` break tsdown's `packages/*/*` glob); install; then build in the order of the version being
+   built. **0.2.2 and later:** move the old build output aside (W `tools/fork-upgrade/move-build-outputs.mjs`:
+   this tree's `scripts/clean.ts` plan minus `node_modules`, plus `apps/web/dist`, renamed into the swap's backup
+   folder), then `pnpm run typecheck`, then `pnpm run build`. tsdown writes `lib/` with `clean: false`, so the
+   other version's files would survive and be recorded as current artifacts; typecheck generates the Typert
+   declarations before it compiles (lq-ki7n live swap: the rc.2 order below type-errored, then ran out of heap).
+   **rc.2 (rollback only):** `tsc -b tsconfig.host.json --force`, `pnpm run build:native-system`,
+   `pnpm run build:lib:host`, `tsc -b tsconfig.client.json --force`, `pnpm run build`; its client check needs the
+   `.d.ts` files host tsdown writes, so it fails if run before `build:lib:host` (lq-1bvo P5 live swap).
    W's `tools/fork-upgrade/p6-swap.ps1` runs steps 1-5 and the rollback (`-WhatIf` first); `-Resume`
    continues a stopped run at its failed step. Its config gate and keyless boot load both of the launcher's
    patches (`deepseek-harness.yml`, then `dsh-section4.patch.yml`), and its rollback restores F to the head it
