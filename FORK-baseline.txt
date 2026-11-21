@@ -226,3 +226,21 @@
 [1,2,3] scripts/repo-files.spec.ts > uniqueRepoFiles rejects glob syntax the walker does not model instead of matching nothing
 [1,2,3] scripts/repo-files.spec.ts > uniqueRepoFiles reports a matched file canonical target for downstream existence checks
 [1,2,3] scripts/verify-application-entrypoints.spec.ts > application entrypoints accepts the repository launcher inventory
+# Fork load flakes, 2026-11-20 (lq-ki7n): [f1] = fork run 1 only, [f2] = fork run 2 only (Astra sweep alongside); each passed in the other run (FORK.md load-flake rule).
+[f1] packages/api/gateway/tests/operator-connect.host.spec.ts > operator connect through Loader composition lets an admitted unary finish after its lifecycle socket closes
+[f1] packages/boot/plugin-manager/tests/package-reload.spec.ts > starts a bundle reinstalled from another link target while a plugin outside a Loader entry keeps the previous one
+[f2] packages/experimental/client-ui-forge/tests/controller.host.spec.ts > forgePanel removed worktrees holds messages for a removed worktree of a Session that no panel follows, until it is left for the source checkout
+[f2] packages/experimental/client-ui-forge/tests/local-diff-safety.host.spec.ts > diff helper restrictions identifies a failed filter read before starting a comparison
+[f2] packages/experimental/client-ui-forge/tests/local-diff.host.spec.ts > commits of the branch scope compares a first commit without a parent with the empty tree
+[f2] packages/experimental/client-ui-forge/tests/local-diff.host.spec.ts > commits of the branch scope reads the committed changes of consecutive commits with the attributes of the last one, without working tree changes
+[f2] packages/experimental/client-ui-forge/tests/local-diff.host.spec.ts > commits of the branch scope refuses a run of commits whose first parents leave it, and reads one that follows them
+[f2] packages/experimental/client-ui-forge/tests/local-diff.host.spec.ts > localChanges measures the branch scope with untracked files last, or nothing without a fork point
+[f2] packages/experimental/client-ui-forge/tests/local-diff.host.spec.ts > localDiff compares a branch without commits with the empty tree
+[f2] packages/experimental/webworker-packer/tests/image-loadable.spec.ts > packed image prepares the unchanged plugin-package inventory through Worker createRequire paths
+[f2] packages/experimental/worktree/tests/archive.spec.ts > archive-triggered worktree cleanup withdraws listeners before draining, so disposal neither fails unrelated access nor serves a stale result
+[f2] packages/experimental/worktree/tests/worktree.spec.ts > rejects a restore path redirected outside the pool by a symlink
+[f2] packages/ptc-runtime/ptc-runtime-node/tests/persistent.spec.ts > retained Node 'script' reports temporary abort without claiming the owner state was cleared
+[f2] packages/session/session-persistence-jsonl/tests/catalog-migration.spec.ts > historical catalog publication (none) composes a V1 parent and child through all preceding edges
+[f2] scripts/migrate-sessions-to-v4.spec.ts > one-time V4 migration command preserves zstd parent/child history and catalog with serial or parallel jobs
+[f2] scripts/stage-dsh-docs.spec.ts > documentation staging publishes the generated index for the repository guides
+[f2] scripts/windows-package-workflow.spec.ts > keeps the dependency store stable across run-specific pnpm homes
