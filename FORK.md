@@ -136,6 +136,16 @@ vitest's `Errors  N error` summary line, `Worker exited unexpectedly`, `EAGAIN`,
 - Every W plugin that writes session messages uses its own source kind (never `plugin`;
   v4 persistence refuses it and the session log stops draining).
 - Every `file://` or packaged W plugin's `@deepseek-ai/dsh*` peer range admits the new version.
+- Every W plugin test passes on the staged tree. Tests that import live F by absolute path
+  (`plugins/repo-tools`, `plugins/evidence-control`) run from a staged copy with that prefix
+  rewritten (W `.agent-results/lq-ki7n/staged-plugin-tests.ps1`); a strict boot alone does not
+  exercise a tool call.
+
+Known gap at 0.2.2-rc.5 (2026-11-20, Bead lq-h0ez): W's section4 plugins (`repo-tools`,
+`evidence-control`) make nested `pwsh` calls with the rc.2 single-call `ctx.tools.execute`
+(`parent: exec.token`). 0.2.2 replaced it with a batch call that carries no `parent`, and
+`ToolsService` has no public nested dispatch, so their tool calls fail at use time while the boot
+is clean (their tests: 88/88 on rc.2, 30/88 on the staged tree). The live swap waits for that port.
 
 **5. Dry run on a copy of `~/.dsh`** (owner go; never open credentials). Snapshot order as
 in step 6: check campaigns, stop the harness and confirm it exited, then back up (step 6.2).
