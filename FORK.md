@@ -141,11 +141,16 @@ vitest's `Errors  N error` summary line, `Worker exited unexpectedly`, `EAGAIN`,
   rewritten (W `.agent-results/lq-ki7n/staged-plugin-tests.ps1`); a strict boot alone does not
   exercise a tool call.
 
-Known gap at 0.2.2-rc.5 (2026-11-20, Bead lq-h0ez): W's section4 plugins (`repo-tools`,
-`evidence-control`) make nested `pwsh` calls with the rc.2 single-call `ctx.tools.execute`
-(`parent: exec.token`). 0.2.2 replaced it with a batch call that carries no `parent`, and
-`ToolsService` has no public nested dispatch, so their tool calls fail at use time while the boot
-is clean (their tests: 88/88 on rc.2, 30/88 on the staged tree). The live swap waits for that port.
+Closed at 0.2.2-rc.5 (2026-11-21): W's section4 plugins (`repo-tools`, `evidence-control`) used
+the rc.2 single-call `ctx.tools.execute` for nested `pwsh` calls. 0.2.2 exports the executors' own
+`ToolExecutionPipeline` (`@deepseek-ai/dsh-tools/pipeline`); W `plugins/tool-call.mjs` runs nested
+calls through it (prepare, dispatch, complete) and checks at startup that `ctx.tools` is that tree's
+`ToolsService` (Bead lq-h0ez; tests 90/90 on 0.2.2, 88 + 2 skips on rc.2). The bench's profile-installed
+`tool-format-recovery` had an exact `dsh-llm` peer pin, which the 0.2.2 compatibility check refuses;
+its range now names both releases (Bead lq-k6wb). A plugin W owns pins exact releases, never a
+caret on 0.x. No swap gate loads the bench overlays, so at the next rebase run W
+`.agent-results/lq-k6wb/bench-preflight.mjs` (the new tree's own startup preflight over the bench
+patch files) on the staged tree; every refused pin is listed there.
 
 **5. Dry run on a copy of `~/.dsh`** (owner go; never open credentials). Snapshot order as
 in step 6: check campaigns, stop the harness and confirm it exited, then back up (step 6.2).
