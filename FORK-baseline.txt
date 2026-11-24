@@ -244,3 +244,10 @@
 [f2] scripts/migrate-sessions-to-v4.spec.ts > one-time V4 migration command preserves zstd parent/child history and catalog with serial or parallel jobs
 [f2] scripts/stage-dsh-docs.spec.ts > documentation staging publishes the generated index for the repository guides
 [f2] scripts/windows-package-workflow.spec.ts > keeps the dependency store stable across run-specific pnpm homes
+# Fork load flakes, 2026-11-24 (lq-c8rv, taskkill full path): [c1] = fork run 1 only, [c2] = fork run 2 only; each passed in the other run and 3/3 alone (FORK.md load-flake rule).
+[c1] scripts/compile-referenced-projects.spec.ts > internal artifact build order compiles a Host metadata consumer from a clean tree
+[c1] packages/experimental/client-ui-forge/tests/controller.host.spec.ts > forgePanel leaving a worktree refuses to leave without a created worktree, while the Session is not loaded, or while its Agent has other work
+[c1] packages/experimental/client-ui-forge/tests/controller.host.spec.ts > forgePanel worktree service changes republishes whether a worktree can be requested when the worktree service appears and leaves
+[c2] scripts/migrate-sessions-to-v4.spec.ts > one-time V4 migration command publishes zstd successors, preserves sources and current bytes on rerun
+[c2] scripts/migrate-sessions-to-v4.spec.ts > one-time V4 migration command preserves none parent/child history and catalog with serial or parallel jobs
+[c2] packages/experimental/client-ui-forge/tests/local-diff-safety.host.spec.ts > diff helper restrictions refuses an incomplete filter listing before running a diff
