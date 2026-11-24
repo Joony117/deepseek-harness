@@ -1169,7 +1169,7 @@ describe('coverage seams', () => {
     taskkill.mockReturnValueOnce({} as never)
     taskkillProcessTree(77)
     expect(taskkill).toHaveBeenLastCalledWith(
-      'taskkill',
+      `${process.env.SystemRoot || 'C:\\Windows'}\\System32\\taskkill.exe`,
       ['/PID', '77', '/T', '/F'],
       { stdio: 'ignore', windowsHide: true },
     )

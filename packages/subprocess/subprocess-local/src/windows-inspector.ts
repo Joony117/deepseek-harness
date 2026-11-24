@@ -145,12 +145,19 @@ export function createWindowsProcessInspector(
   return new WindowsProcessInspector(internals)
 }
 
+/**
+ * taskkill by absolute path. Node on Windows looks a bare program name up in the
+ * child's working directory before PATH, so a `taskkill.exe` left in a workspace
+ * would run in place of the system one.
+ */
+export const TASKKILL = `${process.env.SystemRoot || 'C:\\Windows'}\\System32\\taskkill.exe`
+
 /** Terminate one Windows process tree with taskkill, contained like POSIX group signalling. */
 function taskkillTree(pid: number, force: boolean): void {
   if (pid <= 0) return
   // Outcome deliberately unchecked: an already-absent tree, exit races, and a
   // missing taskkill binary are as tolerable here as ESRCH is for POSIX.
-  spawnSync('taskkill', ['/PID', String(pid), '/T', ...(force ? ['/F'] : [])], {
+  spawnSync(TASKKILL, ['/PID', String(pid), '/T', ...(force ? ['/F'] : [])], {
     stdio: 'ignore',
     windowsHide: true,
   })

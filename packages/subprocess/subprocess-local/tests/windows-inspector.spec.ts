@@ -100,13 +100,13 @@ describe('WindowsProcessInspector (injected internals)', () => {
     inspector.signalGroup(78, 'SIGTERM')
     expect(taskkill).toHaveBeenNthCalledWith(
       1,
-      'taskkill',
+      `${process.env.SystemRoot || 'C:\\Windows'}\\System32\\taskkill.exe`,
       ['/PID', '77', '/T', '/F'],
       { stdio: 'ignore', windowsHide: true },
     )
     expect(taskkill).toHaveBeenNthCalledWith(
       2,
-      'taskkill',
+      `${process.env.SystemRoot || 'C:\\Windows'}\\System32\\taskkill.exe`,
       ['/PID', '78', '/T'],
       { stdio: 'ignore', windowsHide: true },
     )

@@ -25,6 +25,7 @@ import { waitWithAbort } from './managed-owner.ts'
 import { controlEnvironment, controlPipe } from './control-spawn.ts'
 import { SUBPROCESS_CONTROL_FD } from '@deepseek-ai/dsh-subprocess/control'
 import { linuxProcessGroupLiveMember } from './process-inspector.ts'
+import { TASKKILL } from './windows-inspector.ts'
 import { OutputCollector, prepareManagedProcessBinding, type SpillFailureReporter } from './output.ts'
 
 type SpawnProcess = (
@@ -117,7 +118,7 @@ export function taskkillProcessTree(pid: number | undefined): void {
   // Outcome deliberately unchecked: an already-absent tree (status 128), exit
   // races, and a missing taskkill binary (spawnSync reports, never throws) are
   // as tolerable here as ESRCH is for a POSIX group signal.
-  spawnSync('taskkill', ['/PID', String(pid), '/T', '/F'], {
+  spawnSync(TASKKILL, ['/PID', String(pid), '/T', '/F'], {
     stdio: 'ignore',
     windowsHide: true,
   })
